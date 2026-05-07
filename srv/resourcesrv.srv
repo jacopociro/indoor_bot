@@ -1,0 +1,10 @@
+resource request
+---
+resource response
+bool help0
+bool help1
+bool help2
+bool help3
+bool help4
+bool help5
+bool success

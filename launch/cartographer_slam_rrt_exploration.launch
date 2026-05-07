@@ -26,7 +26,6 @@
         <arg name="pitch" value="$(arg pitch)"/>
         <arg name="yaw" value="$(arg yaw)"/>
     </include>
-
     <!-- Launch SLAM -->
     <include file="$(find indoor_bot)/launch/include/cartographer_slam.launch">
         <arg name="configuration_basename" value="$(arg configuration_basename)"/>
@@ -56,3 +55,4 @@
     </include>
 
 </launch>
+

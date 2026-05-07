@@ -16,6 +16,9 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   visualization_msgs
   message_generation
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
 )
 
 
@@ -28,6 +31,12 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   PointArray.msg
+  resource.msg
+)
+
+add_service_files(
+  FILES
+  resourcesrv.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
@@ -35,6 +44,8 @@ generate_messages(
   DEPENDENCIES
   std_msgs
   geometry_msgs
+  sensor_msgs
+
 )
 
 
@@ -54,7 +65,6 @@ catkin_package(
 #  CATKIN_DEPENDS roscpp rospy std_msgs
 #  DEPENDS system_lib
 )
-
 ###########
 ## Build ##
 ###########
@@ -71,3 +81,15 @@ target_link_libraries(global_rrt_detector ${catkin_LIBRARIES})
 
 add_executable(local_rrt_detector src/local_rrt_detector.cpp src/functions.cpp src/mtrand.cpp)
 target_link_libraries(local_rrt_detector ${catkin_LIBRARIES})
+
+add_executable(my_node src/my_node.cpp)
+target_link_libraries(my_node
+      ${catkin_LIBRARIES}
+      yaml-cpp
+    )
+
+    add_executable(leader src/leader.cpp)
+    target_link_libraries(leader
+          ${catkin_LIBRARIES}
+          yaml-cpp
+        )

@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<launch>
+    
+    <arg name="world_file" default="$(find indoor_bot)/worlds/big_apartment.world"/>
+    <arg name="configuration_basename" default="indoor_bot_lidar_slam_2d_gazebo.lua"/>
+    <!-- Launch WORLD -->
+    <include file="$(find indoor_bot)/launch/include/world.launch">
+        <arg name="world_file" value="$(arg world_file)"/>
+    </include>
+
+    <rosparam file="$(find indoor_bot)/config/swarm_config.yaml" command="load"/>
+
+
+    <!-- ROBOT 1 -->
+    <group ns="rosbot_1">
+      <param name="tf_prefix" value="rosbot_1"/>
+
+        <include file="$(find indoor_bot)/launch/include/indoor_bot.launch">
+            <arg name="x" value="-12.0"/>
+            <arg name="y" value="-6.0"/>
+            <arg name="z" value="0"/>
+            <arg name="roll" value="0"/>
+            <arg name="pitch" value="0"/>
+            <arg name="yaw" value="0"/>
+            <arg name="robot_name" value="rosbot_1"/>
+        </include>
+          <node pkg="indoor_bot" type="my_node" name="my_node" output="screen" launch-prefix="bash -c 'sleep 25; $0 $@'">
+            <param name="robot_name" value="rosbot_1"/>
+            <param name="robot_id" value="0"/>
+            <param name="simulation_mode" value="true"/>
+          </node>
+    </group>
+
+    <!-- ROBOT 2 -->
+    <group ns="rosbot_2">
+        <param name="tf_prefix" value="rosbot_2"/>
+
+        <include file="$(find indoor_bot)/launch/include/indoor_bot.launch">
+            <arg name="x" value="-8.0"/>
+            <arg name="y" value="-6.0"/>
+            <arg name="z" value="0"/>
+            <arg name="roll" value="0"/>
+            <arg name="pitch" value="0"/>
+            <arg name="yaw" value="0"/>
+            <arg name="robot_name" value="rosbot_2"/>
+        </include>
+          <node pkg="indoor_bot" type="my_node" name="my_node" output="screen" launch-prefix="bash -c 'sleep 25; $0 $@'">
+            <param name="robot_name" value="rosbot_2"/>
+            <param name="robot_id" value="1"/>
+            <param name="simulation_mode" value="true"/>
+          </node>
+    </group>
+        <!-- ROBOT 3 -->
+    <!-- <group ns="rosbot_3">
+        <param name="tf_prefix" value="rosbot_3"/>
+        
+        <include file="$(find indoor_bot)/launch/include/indoor_bot.launch">
+            <arg name="x" value="-10.0"/>
+            <arg name="y" value="-6.0"/>
+            <arg name="z" value="0"/>
+            <arg name="roll" value="0"/>
+            <arg name="pitch" value="0"/>
+            <arg name="yaw" value="0"/>
+            <arg name="robot_name" value="rosbot_3"/>
+        </include>
+          <node pkg="indoor_bot" type="my_node" name="my_node" output="screen" launch-prefix="bash -c 'sleep 25; $0 $@'">
+            <param name="robot_name" value="rosbot_3"/>
+            <param name="robot_id" value="2"/>
+            <param name="simulation_mode" value="true"/>
+          </node>
+    </group> -->
+
+    <node pkg="indoor_bot" type="leader" name="leader" output="screen"/>
+    <!-- Teleoperation node -->
+    <!-- <node pkg="teleop_twist_keyboard" type="teleop_twist_keyboard.py" name="teleop" output="screen"/> -->
+        <node pkg="tf"
+    type="static_transform_publisher"
+    name="odomtorobot0"
+        args="0 0 0 0 0 0 1 odom rosbot_1/odom 100"
+    />
+        <node pkg="tf"
+    type="static_transform_publisher"
+    name="odomtorobot1"
+        args="0 0 0 0 0 0 1 odom rosbot_2/odom 100"
+    />
+        <node pkg="tf"
+    type="static_transform_publisher"
+    name="odomtorobot2"
+        args="0 0 0 0 0 0 1 odom rosbot_3/odom 100"
+    />
+    <!-- RVIZ -->
+    <include file="$(find indoor_bot)/launch/include/rviz.launch">
+        <arg name="rviz_config" value="$(find indoor_bot)/rviz/indoor_bot.rviz" />
+    </include>
+    
+</launch>
