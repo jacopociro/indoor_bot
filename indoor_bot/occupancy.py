@@ -1,308 +1,413 @@
 import os
-import re
 import glob
-import xml.etree.ElementTree as ET
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
 
-WORLD_FILE = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/worlds/big_apartment.world"
-CSV_FOLDER = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data"
-GRID_RESOLUTION = 0.2  # meters
-ROBOT_RADIUS = 2.0     # meters used to mark nearby cells as visited
+# ==================================================
+# CONFIGURATION
+# ==================================================
+import argparse
 
-# da sistemare gli ostacoli che sono messi male. probabilmente da fare a mano.
+parser = argparse.ArgumentParser()
 
-# --------------------------------------------------
-# Parse world extents from .world file
-# --------------------------------------------------
-def extract_world_bounds(world_file):
-    tree = ET.parse(world_file)
-    root = tree.getroot()
+parser.add_argument(
+    "--experiment",
+    required=True,
+    help="Cartella dell'esperimento"
+)
+parser.add_argument(
+    "--noshow",
+    action="store_false",
+    help="Nasconde le figure"
+)
+args = parser.parse_args()
 
-    x_values = []
-    y_values = []
+EXPERIMENT_FOLDER = args.experiment
 
-    for model in root.iter("model"):
-        name = model.attrib.get("name", "")
+CSV_FOLDER = f"{EXPERIMENT_FOLDER}"
 
-        # Ignora elementi globali
-        if any(k in name.lower() for k in ["sun", "ground"]):
-            continue
-
-        pose_tag = model.find("pose")
-        if pose_tag is None or pose_tag.text is None:
-            continue
-
-        try:
-            pose_values = [float(v) for v in pose_tag.text.strip().split()]
-            x = pose_values[0]
-            y = pose_values[1]
-            x_values.append(x)
-            y_values.append(y)
-
-            size_tag = model.find(".//size")
-            if size_tag is not None and size_tag.text is not None:
-                size_values = [float(v) for v in size_tag.text.strip().split()]
-                sx = size_values[0]
-                sy = size_values[1]
-
-                x_values.extend([x - sx / 2.0, x + sx / 2.0])
-                y_values.extend([y - sy / 2.0, y + sy / 2.0])
-        except:
-            continue
-
-    if len(x_values) == 0 or len(y_values) == 0:
-        raise ValueError("Impossibile estrarre i bounds dal file .world")
-
-    xmin = min(x_values)
-    xmax = max(x_values)
-    ymin = min(y_values)
-    ymax = max(y_values)
-
-    margin = 2.0
-    xmin -= margin
-    xmax += margin
-    ymin -= margin
-    ymax += margin
-
-    return xmin, xmax, ymin, ymax
-
+MISSION_TIME_FILES = [
+    "rosbot_1_0_mission_times.csv",
+    "rosbot_2_1_mission_times.csv",
+    "rosbot_3_2_mission_times.csv",
+]
+# OUTPUT_FOLDER = f"./results/{EXPERIMENT_FOLDER}"
+# CSV_FOLDER = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_equal2"
+OUTPUT_DIR = os.path.join(CSV_FOLDER, "plots")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+GRID_RESOLUTION = 0.2      # meters
+ROBOT_RADIUS = 2.5         # meters
 
 # --------------------------------------------------
-# Parse obstacle positions from world file
+# Manual world bounds
 # --------------------------------------------------
-def extract_obstacles(world_file):
-    tree = ET.parse(world_file)
-    root = tree.getroot()
-
-    obstacles = []
-
-    for model in root.iter("model"):
-        name = model.attrib.get("name", "")
-
-        # Ignora robot, sole e ground plane
-        if any(k in name.lower() for k in ["robot", "rosbot", "ground", "sun"]):
-            continue
-
-        model_pose = [0.0] * 6
-        pose_tag = model.find("pose")
-        if pose_tag is not None and pose_tag.text is not None:
-            try:
-                model_pose = [float(v) for v in pose_tag.text.strip().split()]
-            except:
-                pass
-
-        model_x = model_pose[0]
-        model_y = model_pose[1]
-
-        # Cerca collision box e visual box nei link
-        for link in model.findall("link"):
-            link_pose = [0.0] * 6
-            link_pose_tag = link.find("pose")
-            if link_pose_tag is not None and link_pose_tag.text is not None:
-                try:
-                    link_pose = [float(v) for v in link_pose_tag.text.strip().split()]
-                except:
-                    pass
-
-            link_x = model_x + link_pose[0]
-            link_y = model_y + link_pose[1]
-
-            collision_elements = link.findall("collision") + link.findall("visual")
-
-            for element in collision_elements:
-                local_pose = [0.0] * 6
-                local_pose_tag = element.find("pose")
-                if local_pose_tag is not None and local_pose_tag.text is not None:
-                    try:
-                        local_pose = [float(v) for v in local_pose_tag.text.strip().split()]
-                    except:
-                        pass
-
-                obstacle_x = link_x + local_pose[0]
-                obstacle_y = link_y + local_pose[1]
-
-                size_x = 1.0
-                size_y = 1.0
-
-                box_size_tag = element.find("geometry/box/size")
-                if box_size_tag is not None and box_size_tag.text is not None:
-                    try:
-                        size_values = [float(v) for v in box_size_tag.text.strip().split()]
-                        size_x = size_values[0]
-                        size_y = size_values[1]
-                    except:
-                        pass
-                else:
-                    cylinder_radius_tag = element.find("geometry/cylinder/radius")
-                    if cylinder_radius_tag is not None and cylinder_radius_tag.text is not None:
-                        try:
-                            radius = float(cylinder_radius_tag.text.strip())
-                            size_x = radius * 2.0
-                            size_y = radius * 2.0
-                        except:
-                            pass
-
-                obstacles.append({
-                    "x": obstacle_x,
-                    "y": obstacle_y,
-                    "sx": size_x,
-                    "sy": size_y
-                })
-
-    return obstacles
-
-
+XMIN = -14.0
+XMAX = 7.0
+YMIN = -6.0
+YMAX = 4.0
 
 # --------------------------------------------------
-# Build occupancy grid
+# Rectangular areas to exclude
+# Format:
+# (xmin, xmax, ymin, ymax)
 # --------------------------------------------------
+EMPTY_AREAS = [
+    (-4.0, -1.0, -6.0, -1.0),
+    (-14.0, -8.0, 0.0, 0.1),
+    (2.0, 5.0, -0.1, 0.0),
+    (1.8, 2.0, 2.0, 4.0),
+    (-1.0, 1.0, -6.0, -5.0),
+    (4.0, 7.0, -6.0, -5.0),
+    (5.0, 7.0, -6.0, -4.0),
+]
+
+
+LOG_FILE = os.path.join(OUTPUT_DIR, "results.log")
+
+
+def log_print(text):
+    
+    line = f"{text}"
+    print(line)
+    with open(LOG_FILE, "a") as f:
+        f.write(line + "\n")
+
+# ==================================================
+# GRID UTILITIES
+# ==================================================
+
 def build_grid(xmin, xmax, ymin, ymax, resolution):
     width = int(np.ceil((xmax - xmin) / resolution))
     height = int(np.ceil((ymax - ymin) / resolution))
 
     visited = np.zeros((height, width), dtype=bool)
-    obstacle = np.zeros((height, width), dtype=bool)
+    excluded = np.zeros((height, width), dtype=bool)
 
-    return visited, obstacle
+    return visited, excluded
 
 
-# --------------------------------------------------
-# Convert world coordinates to grid indices
-# --------------------------------------------------
 def world_to_grid(x, y, xmin, ymin, resolution):
     gx = int((x - xmin) / resolution)
     gy = int((y - ymin) / resolution)
+
     return gx, gy
 
 
-# --------------------------------------------------
-# Mark obstacles in occupancy grid
-# --------------------------------------------------
-def mark_obstacles(obstacle_grid, obstacles, xmin, ymin, resolution):
-    height, width = obstacle_grid.shape
+# ==================================================
+# EXCLUDED AREAS
+# ==================================================
 
-    for obs in obstacles:
-        x0 = obs["x"] - obs["sx"] / 2.0
-        x1 = obs["x"] + obs["sx"] / 2.0
-        y0 = obs["y"] - obs["sy"] / 2.0
-        y1 = obs["y"] + obs["sy"] / 2.0
+def mark_empty_areas(excluded_grid,
+                     empty_areas,
+                     xmin,
+                     ymin,
+                     resolution):
 
-        gx0, gy0 = world_to_grid(x0, y0, xmin, ymin, resolution)
-        gx1, gy1 = world_to_grid(x1, y1, xmin, ymin, resolution)
+    height, width = excluded_grid.shape
+
+    for x0, x1, y0, y1 in empty_areas:
+
+        gx0, gy0 = world_to_grid(
+            x0,
+            y0,
+            xmin,
+            ymin,
+            resolution
+        )
+
+        gx1, gy1 = world_to_grid(
+            x1,
+            y1,
+            xmin,
+            ymin,
+            resolution
+        )
 
         gx0 = max(0, min(width - 1, gx0))
         gx1 = max(0, min(width - 1, gx1))
+
         gy0 = max(0, min(height - 1, gy0))
         gy1 = max(0, min(height - 1, gy1))
 
-        obstacle_grid[gy0:gy1 + 1, gx0:gx1 + 1] = True
+        excluded_grid[gy0:gy1 + 1, gx0:gx1 + 1] = True
 
 
-# --------------------------------------------------
-# Mark visited cells from CSV trajectory
-# --------------------------------------------------
-def mark_visited_cells(visited_grid, csv_files, xmin, ymin, resolution, robot_radius):
-    height, width = visited_grid.shape
-    radius_cells = int(np.ceil(robot_radius / resolution))
-
-    for csv_file in csv_files:
-        print(f"Processing {csv_file}")
-        df = pd.read_csv(csv_file)
-
-        for _, row in df.iterrows():
-            x = row["x"]
-            y = row["y"]
-
-            gx, gy = world_to_grid(x, y, xmin, ymin, resolution)
-
-            for dx in range(-radius_cells, radius_cells + 1):
-                for dy in range(-radius_cells, radius_cells + 1):
-                    nx = gx + dx
-                    ny = gy + dy
-
-                    if 0 <= nx < width and 0 <= ny < height:
-                        if dx * dx + dy * dy <= radius_cells * radius_cells:
-                            visited_grid[ny, nx] = True
-
-
-# --------------------------------------------------
-# Main
-# --------------------------------------------------
-def main():
-    xmin, xmax, ymin, ymax = extract_world_bounds(WORLD_FILE)
-
-    print(f"World bounds:")
-    print(f"xmin={xmin:.2f}, xmax={xmax:.2f}")
-    print(f"ymin={ymin:.2f}, ymax={ymax:.2f}")
-
-    visited_grid, obstacle_grid = build_grid(
-        xmin, xmax, ymin, ymax, GRID_RESOLUTION
-    )
-
-    obstacles = extract_obstacles(WORLD_FILE)
-    mark_obstacles(
-        obstacle_grid,
-        obstacles,
-        xmin,
-        ymin,
-        GRID_RESOLUTION
-    )
-
-    csv_files = glob.glob(os.path.join(CSV_FOLDER, "rosbot*_position.csv"))
-
-    if len(csv_files) == 0:
-        raise FileNotFoundError("Nessun CSV trovato nella cartella specificata")
-
-    mark_visited_cells(
+# ==================================================
+# VISITED CELLS
+# ==================================================
+def mark_visited_cells(
         visited_grid,
         csv_files,
         xmin,
         ymin,
-        GRID_RESOLUTION,
-        ROBOT_RADIUS
+        resolution,
+        robot_radius,
+        max_time):
+
+    height, width = visited_grid.shape
+
+    radius_cells = int(
+        np.ceil(robot_radius / resolution)
     )
 
+    for csv_file in csv_files:
+
+        print(f"Processing {csv_file}")
+
+        df = pd.read_csv(csv_file)
+
+        # taglio temporale
+        df = df[df["time"] <= max_time]
+
+        # mantiene il comportamento precedente
+        df = df.iloc[2:]
+
+        for _, row in df.iterrows():
+
+            x = row["x"]
+            y = row["y"]
+
+            gx, gy = world_to_grid(
+                x,
+                y,
+                xmin,
+                ymin,
+                resolution
+            )
+
+            for dx in range(
+                    -radius_cells,
+                    radius_cells + 1):
+
+                for dy in range(
+                        -radius_cells,
+                        radius_cells + 1):
+
+                    nx = gx + dx
+                    ny = gy + dy
+
+                    if not (
+                        0 <= nx < width and
+                        0 <= ny < height
+                    ):
+                        continue
+
+                    if (
+                        dx * dx +
+                        dy * dy
+                    ) <= (
+                        radius_cells *
+                        radius_cells
+                    ):
+                        visited_grid[ny, nx] = True
+
+# ==================================================
+# MISSION TIME
+# ==================================================
+
+def get_max_mission_time(csv_folder):
+
+    mission_times = []
+
+    for file in MISSION_TIME_FILES:
+
+        path = os.path.join(
+            csv_folder,
+            file
+        )
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Mission time file not found: {path}"
+            )
+
+        df = pd.read_csv(path)
+
+        # Usa il completamento della ricarica come tempo massimo
+        max_time = df["charging_completion_time"].max()
+
+        mission_times.append(max_time)
+
+        print(
+            f"{file}: mission end = {max_time:.2f} s"
+        )
+
+    # Tempo massimo globale tra i tre robot
+    return max(mission_times)
+
+# ==================================================
+# MAIN
+# ==================================================
+
+def main():
+
+    xmin = XMIN
+    xmax = XMAX
+    ymin = YMIN
+    ymax = YMAX
+
+    print("===== WORLD BOUNDS =====")
+    print(f"xmin = {xmin}")
+    print(f"xmax = {xmax}")
+    print(f"ymin = {ymin}")
+    print(f"ymax = {ymax}")
+
+    visited_grid, excluded_grid = build_grid(
+        xmin,
+        xmax,
+        ymin,
+        ymax,
+        GRID_RESOLUTION
+    )
+
+    # Mark manually excluded areas
+    mark_empty_areas(
+        excluded_grid,
+        EMPTY_AREAS,
+        xmin,
+        ymin,
+        GRID_RESOLUTION
+    )
+    MAX_TIME = get_max_mission_time(
+    CSV_FOLDER
+    )
+
+    log_print(
+        f"MAX_TIME used: {MAX_TIME:.2f} s"
+    )
+    csv_files = glob.glob(
+        os.path.join(
+            CSV_FOLDER,
+            "rosbot*_position.csv"
+        )
+    )
+
+    if len(csv_files) == 0:
+        raise FileNotFoundError(
+            "No CSV files found"
+        )
+
+    mark_visited_cells(
+    visited_grid,
+    csv_files,
+    xmin,
+    ymin,
+    GRID_RESOLUTION,
+    ROBOT_RADIUS,
+    MAX_TIME
+    )
+
+    # ==================================================
+    # Statistics
+    # ==================================================
+
     total_cells = visited_grid.size
-    obstacle_cells = np.sum(obstacle_grid)
-    real_cells = total_cells - obstacle_cells
 
-    visited_real_cells = np.sum(np.logical_and(visited_grid, ~obstacle_grid))
+    excluded_cells = np.sum(excluded_grid)
 
-    occupancy_percentage = (visited_real_cells / real_cells) * 100.0
+    valid_cells = (
+        total_cells -
+        excluded_cells
+    )
 
-    print("\n===== RESULTS =====")
-    print(f"Total cells      : {total_cells}")
-    print(f"Obstacle cells   : {obstacle_cells}")
-    print(f"Real free cells  : {real_cells}")
-    print(f"Visited cells    : {visited_real_cells}")
-    print(f"Occupancy %      : {occupancy_percentage:.2f}%")
+    visited_valid_cells = np.sum(
+        np.logical_and(
+            visited_grid,
+            ~excluded_grid
+        )
+    )
 
-        # --------------------------------------------------
-    # Plot occupancy grid
-    # --------------------------------------------------
-    display_grid = np.zeros_like(visited_grid, dtype=int)
+    occupancy_percentage = (
+        visited_valid_cells /
+        valid_cells
+    ) * 100.0
+
+    log_print("===== OCCUPANCY RESULTS =====")
+    log_print(f"Total cells: {total_cells}")
+    log_print(f"Excluded cells: {excluded_cells}")
+    log_print(f"Valid cells: {valid_cells}")
+    log_print(f"Visited cells: {visited_valid_cells}")
+    log_print(f"Occupancy %: {occupancy_percentage:.2f}%")
+
+    # ==================================================
+    # Visualization
+    # ==================================================
+
+    display_grid = np.zeros_like(
+        visited_grid,
+        dtype=int
+    )
 
     # 0 = free
-    # 1 = obstacle
+    # 1 = excluded
     # 2 = visited
-    display_grid[obstacle_grid] = 1
-    display_grid[np.logical_and(visited_grid, ~obstacle_grid)] = 2
+
+    display_grid[excluded_grid] = 1
+
+    display_grid[
+        np.logical_and(
+            visited_grid,
+            ~excluded_grid
+        )
+    ] = 2
 
     plt.figure(figsize=(12, 8))
+
     plt.imshow(
         display_grid,
         origin="lower",
         interpolation="nearest"
     )
-    plt.title("Occupancy Grid")
+
+    plt.title("Coverage Map")
+
     plt.xlabel("Grid X")
     plt.ylabel("Grid Y")
-    plt.colorbar(label="0=free, 1=obstacle, 2=visited")
+
+    plt.colorbar(
+        label="0=free, 1=excluded, 2=visited"
+    )
+    # ==================================================
+    # ROBOT TRAJECTORIES
+    # ==================================================
+
+    csv_files = sorted(csv_files)
+
+    colors = ["red", "blue", "green"]
+
+    for i, csv_file in enumerate(csv_files[:3]):
+
+        df = pd.read_csv(csv_file)
+
+        df = df[df["time"] <= MAX_TIME]
+
+        df = df.iloc[2:]
+        x = df["x"].to_numpy()
+        y = df["y"].to_numpy()
+
+        plt.plot(
+            (x - xmin) / GRID_RESOLUTION,
+            (y - ymin) / GRID_RESOLUTION,
+            color=colors[i % len(colors)],
+            linewidth=1.5,
+            label=f"Robot {i+1}"
+        )
+
+        plt.scatter(
+        (x[0] - xmin) / GRID_RESOLUTION,
+        (y[0] - ymin) / GRID_RESOLUTION,
+        color=colors[i % len(colors)],
+        marker="o",
+        s=40
+        )
+    plt.savefig(os.path.join(OUTPUT_DIR, "occupancy_map.png"), dpi=300)
     plt.tight_layout()
-    plt.show()
+    if args.noshow:
+        plt.show()
+
 
 if __name__ == "__main__":
     main()

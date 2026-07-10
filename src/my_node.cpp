@@ -85,12 +85,12 @@ private:
     std::ofstream battery_file_;
 
     double radius = 0.1;      // real: , sim:
-    float obs_gvalue = 0.1f; // 0.1, 0.15,  Gaussian value for obstacles
+    float obs_gvalue = 0.4f; // 0.1, 0.15,  Gaussian value for obstacles
     float drones_gvalue = 0.4f; // 0.4, 0.4,  Gaussian value for other drones
     float docks_gvalue = 6.0f; // 6.0, 6.0,  Gaussian value for charging stations
-    float wp_gvalue = 3.0f; // 3.0, 4.6,  Gaussian value for waypoints
+    float wp_gvalue = 4.6f; // 3.0, 4.6,  Gaussian value for waypoints
     float split = 0.95;
-    double max_vel = 0.05;//0.05;
+    double max_vel = 0.2;//0.05;
     const size_t MAX_SIZE = 1440;
     bool returning = false;
     bool help0 = false;
@@ -103,6 +103,7 @@ private:
     std::vector<double> Priority;
     std::vector<double> Mem_leader;
     std::vector<bool> discovered_;
+    std::vector<bool> complete;
     // Posizione robot
     std::vector<Point2D> robot;
     bool odom_received_;
@@ -306,6 +307,7 @@ public:
         Mem_leader.push_back(0.0);
         Priority.push_back(0.0);
         discovered_.push_back(true);
+        complete.push_back(false);
     }
     discovered_[4] = false; // Waypoint 5 is initially undiscovered
     Priority.push_back(0.0); // Battery priority
@@ -315,6 +317,7 @@ public:
         ROS_INFO("Gazebo is ready!");
     }
     resource_client_ = nh_.serviceClient<indoor_bot::resourcesrv>("resource_service");
+    resource_client_.waitForExistence();
     std::string base_name = "/root/catkin_ws/src/indoor_bot/indoor_bot/data/" + name + "_" + std::to_string(id);
 
     pos_file_.open(base_name + "_position.csv");
@@ -375,6 +378,7 @@ public:
     // ========================
     void odomCallback(const nav_msgs::Odometry::ConstPtr& msg, int id_)
     {
+        static ros::Time old;
         // rotated_wp.x = cos_angle * wp.x + sin_angle * wp.z;
         // rotated_wp.y = wp.y; // Y remains unchanged
         // rotated_wp.z = -sin_angle * wp.x + cos_angle * wp.z;
@@ -393,6 +397,11 @@ public:
         robot[id_].yaw = std::atan2(siny_cosp, cosy_cosp);
         odom_received_ = true;
         //ROS_INFO("Current robot position: x=%.2f, y=%.2f, yaw=%.2f", robot[id_].x, robot[id_].y, robot[id_].yaw);
+        old = msg->header.stamp;
+        ros::Time now = ros::Time::now();
+
+        // ROS_INFO("callback delay %.3f",
+        // (now - msg->header.stamp).toSec());
     }
 
     // ========================
@@ -444,11 +453,26 @@ public:
                 // obs_.x = obs.x;
                 // obs_.y = obs.y;
             }
-            
+
 
         }
-        //ROS_INFO("obs pos size %i", obs_positions.size());
-        // obs_positions.push_back(obs_);
+        static ros::Time old;
+
+        double dt =
+        (msg->header.stamp - old).toSec();
+
+        // ROS_INFO("robot %d | stamp %.6f | dt %.6f | sim %.6f",
+        //     id,
+        //     msg->header.stamp.toSec(),
+        //     dt,
+        //     ros::Time::now().toSec());
+
+        old = msg->header.stamp;
+        ros::Time now = ros::Time::now();
+
+        // ROS_INFO("callback delay %.3f",
+        // (now - msg->header.stamp).toSec());
+
 
         
     }
@@ -556,12 +580,14 @@ public:
         {
             Memory_temp[counter] = I * split;
             Mem_leader[counter]  = (I - I * split);
+            
 
         }
         else        {
             Memory_temp[counter] = 0.0; //I * split;
             Mem_leader[counter]  = 0.0; //I - I * split;
         }
+        
         return P;
     }
     double gaussian(double x, double stddev)
@@ -603,44 +629,48 @@ public:
     void sendRequest()
     {
         indoor_bot::resourcesrv srv;
-        
+        for (int i = 0; i < Memory.size(); i++){
+            if (complete[i] == true){
+                Mem_leader[i] = 1000.5;
+            }
+        }
         srv.request.request.resource0 = Mem_leader[0];
         srv.request.request.resource1 = Mem_leader[1];
         srv.request.request.resource2 = Mem_leader[2];
         srv.request.request.resource3 = Mem_leader[3];
         srv.request.request.resource4 = Mem_leader[4];
+
         // Da modificare per inspection
-        // if (help0 == true){
-        //     srv.request.request.resource0 = Mem_leader[0] + Memory[0]/3;
+        if (help0 == true){
+            srv.request.request.resource0 = Mem_leader[0] + Memory[0]/10;
 
-        //     Memory[0] = Memory[0] - Memory[0]/3;
-        //     ROS_INFO("Help needed: %s", help1 ? "Yes" : "No");
-        // }
-        // if (help1 == true){
-        //     srv.request.request.resource1 = Mem_leader[1] + Memory[1]/3;
+            Memory[0] = Memory[0] - Memory[0]/10;
+            //ROS_INFO("Help needed: %s", help1 ? "Yes" : "No");
+        }
+        if (help1 == true){
+            srv.request.request.resource1 = Mem_leader[1] + Memory[1]/10;
 
-        //     Memory[1] = Memory[1] - Memory[1]/3;
-        //     ROS_INFO("Help needed: %s", help1 ? "Yes" : "No");
-        // }
-        // if (help2 == true){
-        //     srv.request.request.resource2 = Mem_leader[2] + Memory[2]/3;    
-        //     Memory[2] = Memory[2] - Memory[2]/3;
-        //     ROS_INFO("Help needed: %s", help2 ? "Yes" : "No ");
-        // }
-        // if (help3 == true){
-        //     srv.request.request.resource3 = Mem_leader[3] + Memory[3]/3 ;   
-        //     Memory[3] = Memory[3] - Memory[3]/3;
-        //     ROS_INFO("Help needed: %s", help3 ? "Yes" : "No");
-        // }
-        // if (help4 == true){
-        //     srv.request.request.resource4 = Mem_leader[4] + Memory[4]/3;    
-        //     Memory[4] = Memory[4] - Memory[4]/3;
-        //     ROS_INFO("Help needed: %s", help4 ? "Yes" : "No");
-        // }   
+            Memory[1] = Memory[1] - Memory[1]/10;
+            //ROS_INFO("Help needed: %s", help1 ? "Yes" : "No");
+        }
+        if (help2 == true){
+            srv.request.request.resource2 = Mem_leader[2] + Memory[2]/10;    
+            Memory[2] = Memory[2] - Memory[2]/10;
+            //ROS_INFO("Help needed: %s", help2 ? "Yes" : "No ");
+        }
+        if (help3 == true){
+            srv.request.request.resource3 = Mem_leader[3] + Memory[3]/10 ;   
+            Memory[3] = Memory[3] - Memory[3]/10;
+            //ROS_INFO("Help needed: %s", help3 ? "Yes" : "No");
+        }
+        if (help4 == true){
+            srv.request.request.resource4 = Mem_leader[4] + Memory[4]/10;    
+            Memory[4] = Memory[4] - Memory[4]/10;
+            //ROS_INFO("Help needed: %s", help4 ? "Yes" : "No");
+        }   
 
-
-    
-        if (resource_client_.call(srv))
+        bool ok = resource_client_.call(srv);
+        if (ok)
         {
             if (srv.response.success)
             {
@@ -657,8 +687,7 @@ public:
                 help3 = srv.response.help3;
                 help4 = srv.response.help4;
                 
-                // ROS_INFO("Memory %.5f %.5f %.5f %.5f %.5f", Memory[0], Memory[1], Memory[2], Memory[3], Memory[4]);
-                // ROS_INFO("Leader contribution %.10f %.10f %.10f %.10f %.10f", srv.response.response.resource0, srv.response.response.resource1, srv.response.response.resource2, srv.response.response.resource3, srv.response.response.resource4);
+                //ROS_INFO("Leader contribution %.10f %.10f %.10f %.10f %.10f to drone %i", srv.response.response.resource0, srv.response.response.resource1, srv.response.response.resource2, srv.response.response.resource3, srv.response.response.resource4, id);
                 // ROS_INFO("Help needed: %s", help ? "Yes" : "No");
             }
             else
@@ -781,7 +810,7 @@ public:
     // ========================
     void run()
     {
-        int control_rate = 15;
+        int control_rate = 20;
         ros::Rate rate(control_rate);
 
         bool uptake = false;
@@ -800,9 +829,19 @@ public:
         // Apply rotation to waypoints
         // double rotation_angle = M_PI; // Pi radians (180 degrees) around the y-axis
         // waypoints_ = rotateWaypoints(waypoints_, rotation_angle);
-        
+        ros::AsyncSpinner spinner(4); // Use 4 threads for callbacks
+        spinner.start();
         while (ros::ok())
+        
         {  
+            //ros::spinOnce();
+            if (Priority[Priority.size() - 1] < 0.6f && std::any_of(Priority.begin(), Priority.end() - 1, [](double p){ return p > 0.6f; })){
+                ros::Time t0 = ros::Time::now();
+                sendRequest();
+                ros::Time t1 = ros::Time::now();
+                // ROS_INFO("Server processing %.3f ms",
+                //     (t1-t0).toSec()*1000.0);
+            }
             if(mission_start_time_ == 0.0){
                 mission_start_time_ = ros::Time::now().toSec();
                 ROS_INFO("Mission timer started: %.2f s", mission_start_time_);
@@ -817,7 +856,7 @@ public:
                 double distance = distance2D(robot[id].x, robot[id].y, wp.x, wp.y);
 
                 double temp = gaussian(distance, wp_gvalue);
-                if (distance < 1.0) // 2.5 sim
+                if (distance < 2.5) // 2.5 sim 1.75 real
                 {
 
                     uptake = true;
@@ -828,12 +867,13 @@ public:
                 {
                     uptake = false;
                 }
-                
+
                 Priority[i] = biological_calculation(i, temp, uptake);
                 //ROS_INFO("Priority[%d]: %.2f", i, Priority[i]);
                 // ROS_INFO("Memory[%d]: %.5f", i, Memory[i]);
                 i = i + 1;
             }
+            
             //ROS_INFO("Priority[%d]: %.2f", i, Priority[i]);
             // Timer 1: si ferma quando tutte le priorità tranne l'ultima sono > 0.0
             if (!mission_timer_stopped_ &&
@@ -879,7 +919,7 @@ public:
                                                             station.x,
                                                             station.y);
         
-                            if (dist_station < 1.0) // soglia arrivo charging station
+                            if (dist_station < 2.0) // soglia arrivo charging station
                             {
                                 charging_completion_time_ = ros::Time::now().toSec() - mission_start_time_;
                                 charging_timer_stopped_ = true;
@@ -934,7 +974,7 @@ public:
             Point2D sum;
             sum.x = 0.0;
             sum.y = 0.0;
-            sendRequest();
+            
             for (const auto& vec : resulting_vectors)
             {
                 sum.x = sum.x + vec.x;
@@ -995,6 +1035,12 @@ public:
             }
             // vel_msg.angular.z = pidYawControl(error, 1, 0.0, 0.0);
             // vel_msg.linear.x = norm * scale ;
+            if (std::isnan(vel_msg.angular.z)) {
+                vel_msg.angular.z = 0.0;
+            }
+            if (std::isnan(vel_msg.linear.x)) {
+                vel_msg.linear.x = 0.0;
+            }
             velocity_pub_.publish(vel_msg);
             if (simulation_mode_)
             {
@@ -1005,6 +1051,7 @@ public:
                 Memory[i] = Memory[i] + Memory_temp[i];
                 if (Memory[i] > 0.0005253){
                     Memory[i] = 0.0005253;
+                    complete[i] = true;
                 }
             }
             
@@ -1053,7 +1100,7 @@ public:
                 mission_time_saved_ = true;
             }
             //obs_positions.clear();
-            ros::spinOnce();
+            
             
             rate.sleep();
             pos_file_.flush();

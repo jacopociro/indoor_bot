@@ -1,0 +1,17 @@
+[2026-06-11 12:28:24] ===== PRIORITY / STATS =====
+[2026-06-11 12:28:24] rosbot_3_2 priority shape: (30236, 6)
+[2026-06-11 12:28:24] rosbot_2_1 priority shape: (30236, 6)
+[2026-06-11 12:28:24] rosbot_1_0 priority shape: (30237, 6)
+[2026-06-11 12:28:25] Memory shape: (37340, 5)
+[2026-06-11 12:28:26] rosbot_3_2 battery samples: 30236
+[2026-06-11 12:28:26] rosbot_2_1 battery samples: 30236
+[2026-06-11 12:28:26] rosbot_1_0 battery samples: 30237
+[2026-06-11 12:28:26] ===== DONE =====
+[2026-06-11 12:28:26] Plots saved in: /home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data/plots
+[2026-06-11 12:28:26] Log file: /home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data/plots/results.log
+===== OCCUPANCY RESULTS =====
+Total cells: 5250
+Excluded cells: 699
+Valid cells: 4551
+Visited cells: 4021
+Occupancy %: 88.35%
