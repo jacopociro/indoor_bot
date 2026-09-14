@@ -155,8 +155,8 @@ public:
     void run()
     {
         start_time = ros::Time::now();
-        quota = {1.0f/2.0f, 1.0f/3.0f, 1.0f/6.0f};
-        //quota = {1.0f/3.0f, 1.0f/3.0f, 1.0f/3.0f};
+        // quota = {1.0f/2.0f, 1.0f/3.0f, 1.0f/6.0f}; // reward
+        quota = {1.0f/3.0f, 1.0f/3.0f, 1.0f/3.0f}; // equal
         while(ros::ok())
         {
             send_back = 0.0000001f;

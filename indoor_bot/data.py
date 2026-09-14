@@ -209,19 +209,21 @@ bottom = np.zeros(3)
 
 for w in range(n_wp):
 
-    plt.bar(
-        robots_name,
-        percent_near_wp[:, w],
-        bottom=bottom,
-        label=f"WP {w+1}"
-    )
+    # plt.bar(
+    #     robots_name,
+    #     percent_near_wp[:, w],
+    #     bottom=bottom,
+    #     label=f"WP {w+1}"
+    # )
 
     bottom += percent_near_wp[:, w]
 
+plt.bar(
+    robots_name,
+    bottom,
+)
 plt.ylabel("% del tempo")
 plt.title("Tempo trascorso entro 2.5 m dai waypoint")
-plt.legend(title="Waypoint")
-plt.tight_layout()
 plt.tight_layout()
 
 plt.savefig(os.path.join(OUTPUT_FOLDER,
@@ -272,7 +274,6 @@ plt.figure(figsize=(6,4))
 plt.bar(["Robot1","Robot2","Robot3"], heading_percent)
 plt.ylabel("% mission")
 plt.title("Heading toward nearest waypoint (<45°)")
-plt.tight_layout()
 plt.tight_layout()
 
 plt.savefig(os.path.join(OUTPUT_FOLDER,

@@ -140,6 +140,7 @@ private:
     double motor_kt_ = 0.017;           // Nm/A
     double drivetrain_efficiency_ = 0.85;
     double aux_current_ = 0.8;          // A
+    double Radis_curv = 0.05;          // m
 
     // Thevenin ECM
     double R0_ = 0.15;                  // ohm
@@ -1030,9 +1031,21 @@ public:
             }
             else {
                 vel_msg.linear.x = norm * scale;
+                if (Radis_curv != 0.0){
+                    vel_msg.linear.x = max_vel / 2;
+                }
                 vel_msg.angular.z = pidYawControl(error, 0.5, 0.01, 0.05);
                 //ROS_INFO("CURVO");
             }
+            if (Radis_curv != 0.0){
+                double max_ang_vel = vel_msg.linear.x / Radis_curv;
+                if (std::abs(vel_msg.angular.z) > max_ang_vel){
+                    vel_msg.angular.z = std::copysign(max_ang_vel, vel_msg.angular.z);
+                }
+                
+            }
+            
+
             // vel_msg.angular.z = pidYawControl(error, 1, 0.0, 0.0);
             // vel_msg.linear.x = norm * scale ;
             if (std::isnan(vel_msg.angular.z)) {

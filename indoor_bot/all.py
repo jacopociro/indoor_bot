@@ -9,6 +9,9 @@ experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot
 # exp_reward1 ... exp_reward10
 experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_reward{i}" for i in range(1, 11)]
 
+experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curvreward5"]
+experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curveequal5"]
+
 scripts = [
     "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data.py",
     "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/plot.py",

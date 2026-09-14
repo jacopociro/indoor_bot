@@ -1390,19 +1390,25 @@ def aggregate_waypoints(
     for w in range(mean.shape[1]):
 
 
-        ax.bar(
-            robots,
-            mean[:,w],
-            bottom=bottom,
-            yerr=std[:,w],
-            capsize=3,
-            label=wp_labels[w]
-        )
+        # ax.bar(
+        #     robots,
+        #     mean[:,w],
+        #     bottom=bottom,
+        #     yerr=std[:,w],
+        #     capsize=3,
+        #     label=wp_labels[w]
+        # )
 
 
         bottom+=mean[:,w]
 
-
+    ax.bar(
+        robots,
+        bottom,
+        yerr=np.sqrt(np.sum(std**2,axis=1)),
+        capsize=5,
+        
+    )
     ax.set_ylabel(
         "% mission"
     )

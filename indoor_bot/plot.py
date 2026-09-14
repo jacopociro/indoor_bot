@@ -199,14 +199,13 @@ fig2.savefig(os.path.join(OUTPUT_DIR, "priority.png"), dpi=300)
 
 fig3, ax3 = plt.subplots(figsize=(10, 4))
 
-memory_file = os.path.join(BASE_PATH, "memory_log.csv")
+memory_file = os.path.join(BASE_PATH, "photosynthesis_log.csv")
 
 if os.path.exists(memory_file):
 
     mem = pd.read_csv(memory_file)
 
-    mem = mem[mem["time"] <= MAX_TIME]
-
+    #mem = mem[mem["time"] <= MAX_TIME]
     mem = mem.iloc[2:]
 
     if not mem.empty:
@@ -220,7 +219,7 @@ if os.path.exists(memory_file):
         ).to_numpy(dtype=float)
 
         for i in range(data.shape[1]):
-            ax3.plot(t, data[:, i], label=f"m{i}")
+            ax3.plot(t, data[:, i])
 
 ax3.set_title("Memory")
 ax3.set_xlabel("Time")
