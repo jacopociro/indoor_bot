@@ -146,7 +146,7 @@ total_time = common_time[-1] - common_time[0]
 # ============================================================
 
 sum_distances = []
-
+distances = []
 for i in range(len(common_time)):
 
     positions = np.array([
@@ -158,7 +158,7 @@ for i in range(len(common_time)):
     center = positions.mean(axis=0)
 
     dist = np.linalg.norm(positions - center, axis=1)
-
+    distances.append(dist)
     sum_distances.append(dist.sum())
 
 plt.figure(figsize=(8,4))
@@ -178,6 +178,30 @@ plt.savefig(os.path.join(OUTPUT_FOLDER,
 if SAVE_PDF:
     plt.savefig(os.path.join(OUTPUT_FOLDER,
                              "swarm_compactness.pdf"))
+
+plt.figure(figsize=(8, 4))
+distances = np.array(distances)
+for j in range(3):
+    plt.plot(common_time, distances[:, j], label=f"UAV {j+1}")
+
+plt.grid(True)
+plt.xlabel("Time [s]")
+plt.ylabel("Distance from swarm center [m]")
+plt.title("Distance of each UAV from swarm center")
+plt.legend()
+plt.tight_layout()
+
+plt.savefig(
+    os.path.join(OUTPUT_FOLDER, "individual_swarm_distance.png"),
+    dpi=300,
+    bbox_inches="tight"
+)
+
+if SAVE_PDF:
+    plt.savefig(
+        os.path.join(OUTPUT_FOLDER, "individual_swarm_distance.pdf"),
+        bbox_inches="tight"
+    )
 
 # ============================================================
 # 2) Tempo entro 2.5 m da ciascun waypoint
@@ -200,7 +224,8 @@ for r, robot in enumerate(interp_data):
 
         time_near = near.sum() * dt
 
-        percent_near_wp[r, w] = 100 * time_near / total_time
+        # percent_near_wp[r, w] = 100 * time_near / total_time
+        percent_near_wp[r, w] = time_near 
 plt.figure(figsize=(8,5))
 
 robots_name = ["Robot1", "Robot2", "Robot3"]
@@ -222,7 +247,7 @@ plt.bar(
     robots_name,
     bottom,
 )
-plt.ylabel("% del tempo")
+plt.ylabel("Time [s]")
 plt.title("Tempo trascorso entro 2.5 m dai waypoint")
 plt.tight_layout()
 

@@ -115,26 +115,35 @@ def get_swarm_mission_time(exp_path):
 
 def analyze_group(experiments, name):
 
-
     results = {
-
         "Robot1": [],
         "Robot2": [],
         "Robot3": [],
         "Swarm": []
-
     }
 
-
     for exp in experiments:
-
 
         print(
             f"Processing {exp}"
         )
 
+        # ==============================================
+        # SINGLE EXPERIMENT RESULTS
+        # ==============================================
 
-        for i,file in enumerate(ROBOT_FILES):
+        experiment_results = {
+            "Robot1": None,
+            "Robot2": None,
+            "Robot3": None,
+            "Swarm": None
+        }
+
+        # ==============================================
+        # ROBOT MISSION TIMES
+        # ==============================================
+
+        for i, file in enumerate(ROBOT_FILES):
 
             value = get_robot_mission_time(
                 exp,
@@ -143,27 +152,69 @@ def analyze_group(experiments, name):
 
             if value is not None:
 
-                results[f"Robot{i+1}"].append(
-                    value
-                )
+                experiment_results[
+                    f"Robot{i+1}"
+                ] = value
 
+                results[
+                    f"Robot{i+1}"
+                ].append(value)
+
+        # ==============================================
+        # SWARM MISSION TIME
+        # ==============================================
 
         swarm_time = get_swarm_mission_time(exp)
 
         if swarm_time is not None:
 
+            experiment_results["Swarm"] = swarm_time
+
             results["Swarm"].append(
                 swarm_time
             )
 
+        # ==============================================
+        # SAVE SINGLE EXPERIMENT DATA
+        # ==============================================
+
+        experiment_df = pd.DataFrame({
+
+            "Agent": [
+                "Robot1",
+                "Robot2",
+                "Robot3",
+                "Swarm"
+            ],
+
+            "Mission time [s]": [
+                experiment_results["Robot1"],
+                experiment_results["Robot2"],
+                experiment_results["Robot3"],
+                experiment_results["Swarm"]
+            ]
+        })
+
+        experiment_df.to_csv(
+            os.path.join(
+                exp,
+                "mission_time_statistics.csv"
+            ),
+            index=False
+        )
+
+    # ==================================================
+    # GROUP STATISTICS
+    # ==================================================
 
     statistics = []
 
+    for key, values in results.items():
 
-    for key,values in results.items():
-
-        values = np.asarray(values)
-
+        values = np.asarray(
+            values,
+            dtype=float
+        )
 
         statistics.append({
 
@@ -181,9 +232,7 @@ def analyze_group(experiments, name):
 
         })
 
-
     return pd.DataFrame(statistics)
-
 
 
 # ==================================================
@@ -219,13 +268,34 @@ print("==============================")
 
 
 
-all_results.to_csv(
-    os.path.join(
-        OUTPUT_DIR,
-        "mission_time_statistics.csv"
-    ),
-    index=False
-)
+# ==================================================
+# SAVE AGGREGATED RESULTS
+# ==================================================
+
+for group_name, group_results in [
+    ("equal", equal_results),
+    ("reward", reward_results)
+]:
+
+    aggregated = group_results[
+        [
+            "Agent",
+            "Mean [s]"
+        ]
+    ].copy()
+
+    aggregated.columns = [
+        "Agent",
+        "Mission time [s]"
+    ]
+
+    aggregated.to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{group_name}_mission_time.csv"
+        ),
+        index=False
+    )
 
 
 
