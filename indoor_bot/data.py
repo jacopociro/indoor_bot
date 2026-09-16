@@ -373,6 +373,7 @@ if SAVE_PDF:
 
 # ============================================================
 # 2) Tempo entro 2.5 m da ciascun waypoint
+#    Ogni istante viene assegnato AL MASSIMO a un waypoint
 # ============================================================
 
 n_wp = len(waypoints)
@@ -386,25 +387,60 @@ for r, robot in enumerate(interp_data):
     x = robot["x"]
     y = robot["y"]
 
-    for w, wp in enumerate(waypoints):
+    # --------------------------------------------------------
+    # Calcola la distanza da tutti i waypoint per ogni istante
+    # Shape: (n_samples, n_wp)
+    # --------------------------------------------------------
 
-        d = np.sqrt(
-            (x - wp[0])**2
-            + (y - wp[1])**2
+    positions = np.column_stack((
+        x,
+        y
+    ))
+
+    distances_wp = np.linalg.norm(
+        positions[:, None, :] - waypoints[None, :, :],
+        axis=2
+    )
+
+    # --------------------------------------------------------
+    # Per ogni istante trova il waypoint più vicino
+    # --------------------------------------------------------
+
+    nearest_wp = np.argmin(
+        distances_wp,
+        axis=1
+    )
+
+    nearest_distance = np.min(
+        distances_wp,
+        axis=1
+    )
+
+    # --------------------------------------------------------
+    # Considera valido solo se il waypoint più vicino
+    # è entro WAYPOINT_RADIUS
+    # --------------------------------------------------------
+
+    near_any_wp = (
+        nearest_distance < WAYPOINT_RADIUS
+    )
+
+    # --------------------------------------------------------
+    # Assegna ogni istante a UN SOLO waypoint
+    # --------------------------------------------------------
+
+    for w in range(n_wp):
+
+        near_this_wp = (
+            near_any_wp
+            & (nearest_wp == w)
         )
-
-        near = d < WAYPOINT_RADIUS
 
         time_near = (
-            near.sum() * dt
+            near_this_wp.sum() * dt
         )
 
-        # percent_near_wp[r, w] = (
-        #     100 * time_near / total_time
-        # )
-
         percent_near_wp[r, w] = time_near
-
 
 # ============================================================
 # Waypoint distance plot

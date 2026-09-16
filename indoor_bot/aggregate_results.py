@@ -2820,10 +2820,6 @@ def compare_heading(
     ])
 
 
-# ==========================================================
-# COMPARISON: WAYPOINT
-# ==========================================================
-
 def compare_waypoints(
         equal_experiments,
         reward_experiments,
@@ -2864,6 +2860,7 @@ def compare_waypoints(
 
         return np.array(data)
 
+
     equal_data = load_waypoint_data(
         equal_experiments
     )
@@ -2871,6 +2868,7 @@ def compare_waypoints(
     reward_data = load_waypoint_data(
         reward_experiments
     )
+
 
     # ==========================================================
     # MEAN AND STD FOR EACH WAYPOINT
@@ -2895,6 +2893,7 @@ def compare_waypoints(
         reward_data,
         axis=0
     )
+
 
     # ==========================================================
     # TOTAL WAYPOINT TIME FOR EACH ROBOT
@@ -2923,6 +2922,7 @@ def compare_waypoints(
             axis=1
         )
     )
+
 
     # ==========================================================
     # ABSOLUTE WAYPOINT TIME COMPARISON
@@ -2982,6 +2982,7 @@ def compare_waypoints(
 
     plt.close(fig)
 
+
     # ==========================================================
     # LOAD MISSION TIMES
     # ==========================================================
@@ -3031,6 +3032,7 @@ def compare_waypoints(
 
         return data
 
+
     equal_mission = load_mission_times(
         equal_experiments
     )
@@ -3039,40 +3041,196 @@ def compare_waypoints(
         reward_experiments
     )
 
-    # ==========================================================
-    # MEAN TOTAL MISSION TIME
-    # ==========================================================
 
-    equal_mission_mean = np.array([
-        np.mean(
-            equal_mission[robot]
-        )
-        for robot in robots
-    ])
-
-    reward_mission_mean = np.array([
-        np.mean(
-            reward_mission[robot]
-        )
-        for robot in robots
-    ])
-    print("Equal mission 0:", np.mean(equal_mission[robots[0]]))
-    print("Equal mean:", equal_mean_total[0])
     # ==========================================================
     # WAYPOINT TIME AS % OF MISSION TIME
+    #
+    # IMPORTANT:
+    # Calculate the ratio for EACH experiment first.
+    #
+    # percentage_i =
+    #       total_waypoint_time_i
+    #       ---------------------- * 100
+    #       mission_time_i
+    #
+    # Then calculate mean and SEM across experiments.
+    # ==========================================================
+
+    def calculate_percentage(
+            experiments,
+            mission_data):
+
+        percentage = {
+            robot: []
+            for robot in robots
+        }
+
+        for exp in experiments:
+
+            # ------------------------------------------
+            # Load waypoint statistics for this experiment
+            # ------------------------------------------
+
+            waypoint_file = os.path.join(
+                exp,
+                "plots",
+                "waypoint_statistics.csv"
+            )
+
+            if not os.path.exists(waypoint_file):
+
+                print(
+                    f"WARNING: missing {waypoint_file}"
+                )
+
+                continue
+
+            waypoint_df = pd.read_csv(
+                waypoint_file,
+                index_col=0
+            )
+
+            waypoint_values = waypoint_df.values
+
+
+            # ------------------------------------------
+            # Load mission time for this experiment
+            # ------------------------------------------
+
+            mission_file = os.path.join(
+                exp,
+                "mission_time_statistics.csv"
+            )
+
+            if not os.path.exists(mission_file):
+
+                print(
+                    f"WARNING: missing {mission_file}"
+                )
+
+                continue
+
+            mission_df = pd.read_csv(
+                mission_file
+            )
+
+
+            # ------------------------------------------
+            # Calculate percentage for each robot
+            # ------------------------------------------
+
+            for r, robot in enumerate(robots):
+
+                row = mission_df[
+                    mission_df["Agent"] == robot
+                ]
+
+                if row.empty:
+                    continue
+
+                mission_time = row[
+                    "Mission time [s]"
+                ].iloc[0]
+
+                if pd.isna(mission_time):
+                    continue
+
+                mission_time = float(
+                    mission_time
+                )
+
+                if mission_time <= 0:
+                    continue
+
+                # Sum waypoint times for this robot
+                waypoint_time = np.sum(
+                    waypoint_values[r]
+                )
+
+                percentage[robot].append(
+                    waypoint_time
+                    / mission_time
+                    * 100
+                )
+
+        return percentage
+
+
+    equal_percentage_values = calculate_percentage(
+        equal_experiments,
+        equal_mission
+    )
+
+    reward_percentage_values = calculate_percentage(
+        reward_experiments,
+        reward_mission
+    )
+
+
+    # ==========================================================
+    # MEAN + SEM
     # ==========================================================
 
     equal_percentage = np.array([
-        equal_mean_total[0]/ np.mean(equal_mission[robots[0]])* 100,
-        equal_mean_total[1]/ np.mean(equal_mission[robots[1]])* 100,
-        equal_mean_total[2]/ np.mean(equal_mission[robots[2]])* 100
+        np.mean(
+            equal_percentage_values[robot]
+        )
+        for robot in robots
     ])
 
-    reward_percentage = np.array([
-        reward_mean_total[0]/ np.mean(reward_mission[robots[0]])* 100,
-        reward_mean_total[1]/ np.mean(reward_mission[robots[1]])* 100,
-        reward_mean_total[2]/ np.mean(reward_mission[robots[2]])* 100
+    equal_percentage_sem = np.array([
+        np.std(
+            equal_percentage_values[robot],
+            ddof=1
+        )
+        / np.sqrt(
+            len(equal_percentage_values[robot])
+        )
+        for robot in robots
     ])
+
+
+    reward_percentage = np.array([
+        np.mean(
+            reward_percentage_values[robot]
+        )
+        for robot in robots
+    ])
+
+    reward_percentage_sem = np.array([
+        np.std(
+            reward_percentage_values[robot],
+            ddof=1
+        )
+        / np.sqrt(
+            len(reward_percentage_values[robot])
+        )
+        for robot in robots
+    ])
+
+
+    # ==========================================================
+    # DEBUG
+    # ==========================================================
+
+    print(
+        "\nWaypoint time / mission time:"
+    )
+
+    for i, robot in enumerate(robots):
+
+        print(
+            f"{robot}: "
+            f"Equal = "
+            f"{equal_percentage[i]:.2f} "
+            f"+/- "
+            f"{equal_percentage_sem[i]:.2f} %, "
+            f"Reward = "
+            f"{reward_percentage[i]:.2f} "
+            f"+/- "
+            f"{reward_percentage_sem[i]:.2f} %"
+        )
+
 
     # ==========================================================
     # PERCENTAGE COMPARISON
@@ -3086,6 +3244,8 @@ def compare_waypoints(
         x - width / 2,
         equal_percentage,
         width,
+        yerr=equal_percentage_sem,
+        capsize=3,
         label="Equal"
     )
 
@@ -3093,6 +3253,8 @@ def compare_waypoints(
         x + width / 2,
         reward_percentage,
         width,
+        yerr=reward_percentage_sem,
+        capsize=3,
         label="Reward"
     )
 
@@ -3122,6 +3284,293 @@ def compare_waypoints(
 
     plt.close(fig)
 
+# ==========================================================
+# PHOTOSYNTHESIS
+# ==========================================================
+
+def read_photosynthesis(experiment):
+
+    file = os.path.join(
+        experiment,
+        "photosynthesis_log.csv"
+    )
+
+    if not os.path.exists(file):
+        print(f"WARNING: missing {file}")
+        return np.nan
+
+    df = pd.read_csv(file)
+
+    if "ph" not in df.columns:
+        print(f"WARNING: 'ph' column missing in {file}")
+        return np.nan
+
+    values = pd.to_numeric(
+        df["ph"],
+        errors="coerce"
+    ).dropna()
+
+    if len(values) == 0:
+        return np.nan
+
+    # Media della photosynthesis durante l'esperimento
+    return values.mean()
+
+def load_photosynthesis(exp_folder):
+    """
+    Load photosynthesis_log.csv and return time and photosynthesis.
+    Time is shifted so that each experiment starts from t = 0.
+    """
+
+    path = os.path.join(
+        exp_folder,
+        "photosynthesis_log.csv"
+    )
+
+    if not os.path.exists(path):
+        print(f"WARNING: {path} not found")
+        return None, None
+
+    df = pd.read_csv(path)
+
+    if "time" not in df.columns or "ph" not in df.columns:
+        print(f"WARNING: invalid photosynthesis file: {path}")
+        return None, None
+
+    df = df[["time", "ph"]].dropna()
+
+    if len(df) < 2:
+        return None, None
+
+    df = df.sort_values("time")
+
+    # Start from t = 0
+    t = df["time"].values
+    ph = df["ph"].values
+
+    t = t - t[0]
+
+    return t, ph
+def compare_photosynthesis(
+    equal_experiments,
+    reward_experiments,
+    output_dir
+):
+    """
+    Compare photosynthesis production over time
+    between Equal and Reward experiments.
+    """
+
+    equal_data = []
+    reward_data = []
+
+    # ======================================================
+    # LOAD EQUAL
+    # ======================================================
+
+    for exp in equal_experiments:
+
+        t, ph = load_photosynthesis(exp)
+
+        if t is not None:
+            equal_data.append((t, ph))
+
+    # ======================================================
+    # LOAD REWARD
+    # ======================================================
+
+    for exp in reward_experiments:
+
+        t, ph = load_photosynthesis(exp)
+
+        if t is not None:
+            reward_data.append((t, ph))
+
+    if len(equal_data) == 0 or len(reward_data) == 0:
+        print("WARNING: no photosynthesis data available")
+        return
+
+    # ======================================================
+    # COMMON TIME AXIS
+    # ======================================================
+
+    max_equal_time = max(
+        t[-1] for t, ph in equal_data
+    )
+
+    max_reward_time = max(
+        t[-1] for t, ph in reward_data
+    )
+
+    max_time = min(
+        max_equal_time,
+        max_reward_time
+    )
+
+    # Use the same temporal resolution as the aggregation
+    dt = 0.1
+
+    common_t = np.arange(
+        0,
+        max_time,
+        dt
+    )
+
+    # ======================================================
+    # INTERPOLATE EACH EXPERIMENT
+    # ======================================================
+
+    equal_interp = []
+
+    for t, ph in equal_data:
+
+        valid = (
+            (common_t >= t[0]) &
+            (common_t <= t[-1])
+        )
+
+        interpolated = np.full(
+            len(common_t),
+            np.nan
+        )
+
+        interpolated[valid] = np.interp(
+            common_t[valid],
+            t,
+            ph
+        )
+
+        equal_interp.append(interpolated)
+
+    reward_interp = []
+
+    for t, ph in reward_data:
+
+        valid = (
+            (common_t >= t[0]) &
+            (common_t <= t[-1])
+        )
+
+        interpolated = np.full(
+            len(common_t),
+            np.nan
+        )
+
+        interpolated[valid] = np.interp(
+            common_t[valid],
+            t,
+            ph
+        )
+
+        reward_interp.append(interpolated)
+
+    equal_interp = np.array(equal_interp)
+    reward_interp = np.array(reward_interp)
+
+    # ======================================================
+    # MEAN AND STD
+    # ======================================================
+
+    equal_mean = np.nanmean(
+        equal_interp,
+        axis=0
+    )
+
+    equal_std = np.nanstd(
+        equal_interp,
+        axis=0
+    )
+
+    reward_mean = np.nanmean(
+        reward_interp,
+        axis=0
+    )
+
+    reward_std = np.nanstd(
+        reward_interp,
+        axis=0
+    )
+
+    # ======================================================
+    # SAVE DATA
+    # ======================================================
+
+    output_csv = os.path.join(
+        output_dir,
+        "comparison_photosynthesis.csv"
+    )
+
+    comparison = pd.DataFrame({
+        "time": common_t,
+        "equal_mean": equal_mean,
+        "equal_std": equal_std,
+        "reward_mean": reward_mean,
+        "reward_std": reward_std
+    })
+
+    comparison.to_csv(
+        output_csv,
+        index=False
+    )
+
+    # ======================================================
+    # PLOT
+    # ======================================================
+
+    plt.figure(figsize=RAL_FIGSIZE)
+
+    plt.plot(
+        common_t,
+        equal_mean,
+        label="Equal",
+        linewidth=1.2
+    )
+
+    plt.fill_between(
+        common_t,
+        equal_mean - equal_std,
+        equal_mean + equal_std,
+        alpha=0.2
+    )
+
+    plt.plot(
+        common_t,
+        reward_mean,
+        label="Reward",
+        linewidth=1.2
+    )
+
+    plt.fill_between(
+        common_t,
+        reward_mean - reward_std,
+        reward_mean + reward_std,
+        alpha=0.2
+    )
+
+    plt.xlabel("Time [s]")
+    plt.ylabel("Photosynthesis production")
+    plt.legend()
+
+    plt.tight_layout()
+
+    output_plot = os.path.join(
+        output_dir,
+        "comparison_photosynthesis.png"
+    )
+
+    plt.savefig(
+        output_plot,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+    print(
+        f"Photosynthesis comparison saved to:\n"
+        f"  {output_plot}\n"
+        f"  {output_csv}"
+    )
 
 comparison_output = os.path.join(
     OUTPUT_DIR,
@@ -3164,6 +3613,11 @@ compare_mission_time(
 compare_swarm_compactness(
     equal_data,
     reward_data,
+    comparison_output
+)
+compare_photosynthesis(
+    equal_experiments,
+    reward_experiments,
     comparison_output
 )
 
