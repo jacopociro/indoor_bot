@@ -1,22 +1,63 @@
 import subprocess
+import argparse
 
-# Esperimenti da analizzare
+# ==========================================================
+# CONFIGURATION
+# ==========================================================
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--ral",
+    action="store_true",
+    help="Use RAL/IEEE paper plot formatting"
+)
+
+args = parser.parse_args()
+
+COMMON_ARGS = []
+
+if args.ral:
+    COMMON_ARGS.append("--ral")
+
+
+# ==========================================================
+# ESPERIMENTI
+# ==========================================================
+
 experiments = []
 
 # exp_equal1 ... exp_equal10
-experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_equal{i}" for i in range(1, 11)]
+experiments += [
+    f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_equal{i}"
+    for i in range(1, 11)
+]
 
 # exp_reward1 ... exp_reward10
-experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_reward{i}" for i in range(1, 11)]
+experiments += [
+    f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_reward{i}"
+    for i in range(1, 11)
+]
 
-experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curvreward5"]
-experiments += [f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curveequal5"]
+experiments += [
+    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curvreward5"
+]
+
+experiments += [
+    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curveequal5"
+]
+
 
 scripts = [
     "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data.py",
     "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/plot.py",
     "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/occupancy.py"
 ]
+
+
+# ==========================================================
+# PROCESS EXPERIMENTS
+# ==========================================================
 
 for exp in experiments:
 
@@ -34,21 +75,35 @@ for exp in experiments:
                 script,
                 "--experiment",
                 exp,
-                "--noshow"
+                "--noshow",
+                *COMMON_ARGS
             ],
             check=True
         )
 
+
 print("\nAll experiments completed.")
 print("Starting statistics analysis...")
-scripts = ["/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/aggregate_results.py",
-           "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/mission_time.py"]
+
+
+# ==========================================================
+# STATISTICS SCRIPTS
+# ==========================================================
+
+scripts = [
+    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/aggregate_results.py",
+    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/mission_time.py"
+]
+
 print(f"Running {scripts}")
+
 for script in scripts:
+
     subprocess.run(
         [
             "python3",
-            script
+            script,
+            *COMMON_ARGS
         ],
         check=True
     )

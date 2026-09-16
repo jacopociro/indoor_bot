@@ -10,6 +10,40 @@ import yaml
 from shapely.geometry import LineString, box
 from shapely.ops import unary_union
 
+# ==================================================
+# RAL FIGURE FORMAT
+# ==================================================
+
+FIGSIZE = (4.0, 3.0)
+
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 8,
+
+    "axes.titlesize": 9,
+    "axes.labelsize": 8,
+
+    "xtick.labelsize": 7,
+    "ytick.labelsize": 7,
+
+    "legend.fontsize": 7,
+
+    "axes.linewidth": 0.8,
+
+    "lines.linewidth": 1.2,
+
+    "figure.dpi": 150,
+    "savefig.dpi": 300,
+
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+
+    "xtick.major.size": 3,
+    "ytick.major.size": 3,
+
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+})
 
 # ==================================================
 # CONFIGURATION
@@ -29,7 +63,38 @@ parser.add_argument(
     help="Nasconde le figure"
 )
 
+parser.add_argument(
+    "--ral",
+    action="store_true",
+    help="Use RAL/IEEE paper plot formatting"
+)
 args = parser.parse_args()
+
+RAL_FIGSIZE = (4.0, 3.0)
+
+if args.ral:
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 8,
+        "axes.titlesize": 9,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "lines.linewidth": 1.2,
+        "lines.markersize": 0.1,
+        "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "figure.dpi": 150,
+        "savefig.dpi": 300,
+        "savefig.bbox": "tight",
+    })
+
+
+def get_figsize(default):
+    """Return the RAL figure size when --ral is enabled."""
+    return RAL_FIGSIZE if args.ral else default
 
 EXPERIMENT_FOLDER = args.experiment
 CSV_FOLDER = EXPERIMENT_FOLDER
@@ -546,7 +611,7 @@ def plot_coverage_map(
         trajectories):
 
     fig, ax = plt.subplots(
-        figsize=(12, 8)
+        figsize=FIGSIZE
     )
 
     # ----------------------------------------------
@@ -578,15 +643,14 @@ def plot_coverage_map(
         excluded,
         EXCLUDED_COLOR,
         edgecolor="black",
-        linewidth=1.0
+        linewidth=0.8
     )
 
     # ----------------------------------------------
     # Trajectories
     # ----------------------------------------------
 
-    for i, (x, y) in enumerate(
-            trajectories):
+    for i, (x, y) in enumerate(trajectories):
 
         color = TRAJECTORY_COLORS[
             i % len(TRAJECTORY_COLORS)
@@ -596,8 +660,9 @@ def plot_coverage_map(
             x,
             y,
             color=color,
-            linewidth=1.5,
-            label=f"Robot {i + 1}"
+            linewidth=1.2,
+            label=f"Robot {i + 1}",
+            zorder=5
         )
 
         # Starting point
@@ -606,7 +671,7 @@ def plot_coverage_map(
             y[0],
             color=START_COLOR,
             marker="o",
-            s=40,
+            s=20,
             zorder=10
         )
 
@@ -614,23 +679,23 @@ def plot_coverage_map(
     # Waypoints
     # ----------------------------------------------
 
-    for i, (wx, wy) in enumerate(
-            waypoints):
+    for i, (wx, wy) in enumerate(waypoints):
 
         ax.scatter(
             wx,
             wy,
             color=WAYPOINT_COLOR,
             marker="*",
-            s=120,
+            s=55,
             zorder=10
         )
 
         ax.annotate(
             f"WP{i + 1}",
             (wx, wy),
-            xytext=(5, 5),
-            textcoords="offset points"
+            xytext=(3, 3),
+            textcoords="offset points",
+            fontsize=7
         )
 
     # ----------------------------------------------
@@ -659,40 +724,91 @@ def plot_coverage_map(
         "Y [m]"
     )
 
-    ax.set_title(
-        "Coverage Map"
-    )
+    # No title for RAL paper figure
+
+    # ----------------------------------------------
+    # Grid
+    # ----------------------------------------------
 
     ax.grid(
         True,
-        alpha=0.2
+        linewidth=0.5,
+        alpha=0.25
     )
 
-    ax.legend()
+    ax.set_axisbelow(True)
 
-    plt.tight_layout()
+    # ----------------------------------------------
+    # Spines
+    # ----------------------------------------------
 
-    output_file = os.path.join(
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
+
+    # ----------------------------------------------
+    # Legend
+    # ----------------------------------------------
+
+    ax.legend(
+        loc="best",
+        frameon=True,
+        framealpha=0.9,
+        edgecolor="black"
+    )
+
+    # ----------------------------------------------
+    # Layout
+    # ----------------------------------------------
+
+    fig.tight_layout()
+
+    # ----------------------------------------------
+    # PNG
+    # ----------------------------------------------
+
+    output_png = os.path.join(
         OUTPUT_DIR,
         "occupancy_map.png"
     )
 
-    plt.savefig(
-        output_file,
-        dpi=300
+    fig.savefig(
+        output_png,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    # ----------------------------------------------
+    # PDF
+    # ----------------------------------------------
+
+    output_pdf = os.path.join(
+        OUTPUT_DIR,
+        "occupancy_map.pdf"
+    )
+
+    fig.savefig(
+        output_pdf,
+        bbox_inches="tight"
     )
 
     print(
         f"Coverage map saved to: "
-        f"{output_file}"
+        f"{output_png}"
     )
 
-    if args.noshow:
+    print(
+        f"Coverage map saved to: "
+        f"{output_pdf}"
+    )
 
+    # ----------------------------------------------
+    # Show
+    # ----------------------------------------------
+
+    if args.noshow:
         plt.show()
 
-    plt.close()
-
+    plt.close(fig)
 
 # ==================================================
 # MAIN

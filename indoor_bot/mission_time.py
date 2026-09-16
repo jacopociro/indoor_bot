@@ -20,16 +20,46 @@ REWARD_EXPERIMENTS = [
     for i in range(1, 11)
 ]
 
-
 OUTPUT_DIR = os.path.join(BASE_PATH, "aggregated_results")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
 ROBOT_FILES = [
     "rosbot_1_0_mission_times.csv",
     "rosbot_2_1_mission_times.csv",
     "rosbot_3_2_mission_times.csv",
 ]
+
+
+# ==================================================
+# RAL FIGURE FORMAT
+# ==================================================
+
+FIGSIZE = (4.0, 3.0)
+
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 8,
+    "axes.titlesize": 9,
+    "axes.labelsize": 8,
+    "xtick.labelsize": 7,
+    "ytick.labelsize": 7,
+    "legend.fontsize": 7,
+
+    "axes.linewidth": 0.8,
+    "lines.linewidth": 1.2,
+
+    "figure.dpi": 150,
+    "savefig.dpi": 300,
+
+    "xtick.major.width": 0.8,
+    "ytick.major.width": 0.8,
+
+    "xtick.major.size": 3,
+    "ytick.major.size": 3,
+
+    "pdf.fonttype": 42,
+    "ps.fonttype": 42,
+})
 
 
 # ==================================================
@@ -46,11 +76,8 @@ def get_robot_mission_time(exp_path, filename):
     if not os.path.exists(file_path):
         return None
 
-
     df = pd.read_csv(file_path)
 
-
-    # tempo missione completata
     return float(
         df["mission_completion_time"].iloc[0]
     )
@@ -67,46 +94,48 @@ def get_swarm_mission_time(exp_path):
         "photosynthesis_log.csv"
     )
 
-
     if not os.path.exists(file_path):
         return None
 
-
     df = pd.read_csv(file_path)
-
 
     if len(df) == 0:
         return None
 
-
     t0 = float(
         df["time"].iloc[0]
     )
+
     if t0 == 0.0:
         t0 = float(
             df["time"].iloc[1]
         )
 
     # primo valore ph diverso da zero
-
     completed = df[
         df["ph"] != 0
     ]
 
-
     if completed.empty:
         return None
-
 
     t_end = float(
         completed["time"].iloc[0]
     )
-    for i in range(1,11):
-        if exp_path == f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_reward{i}":
-            print(f"exp_reward{i} - t_end: {t_end - t0:.2f} s")
+
+    for i in range(1, 11):
+
+        if exp_path == (
+            f"/home/gonazza/container_ws/catkin_ws/"
+            f"src/indoor_bot/indoor_bot/exp_reward{i}"
+        ):
+
+            print(
+                f"exp_reward{i} - "
+                f"t_end: {t_end - t0:.2f} s"
+            )
 
     return t_end - t0
-
 
 
 # ==================================================
@@ -244,13 +273,10 @@ equal_results = analyze_group(
     "equal"
 )
 
-
 reward_results = analyze_group(
     REWARD_EXPERIMENTS,
     "reward"
 )
-
-
 
 all_results = pd.concat(
     [
@@ -260,12 +286,9 @@ all_results = pd.concat(
     ignore_index=True
 )
 
-
-
 print("\n==============================")
 print(all_results)
 print("==============================")
-
 
 
 # ==================================================
@@ -298,60 +321,91 @@ for group_name, group_results in [
     )
 
 
-
 # ==================================================
 # PLOT
 # ==================================================
 
-for group in ["equal","reward"]:
-
+for group in ["equal", "reward"]:
 
     df = all_results[
         all_results["Group"] == group
     ]
 
-
-    plt.figure(
-        figsize=(8,5)
+    fig, ax = plt.subplots(
+        figsize=FIGSIZE
     )
 
+    x = np.arange(len(df))
 
-    plt.bar(
-        df["Agent"],
+    ax.bar(
+        x,
         df["Mean [s]"],
         yerr=df["Std [s]"],
-        capsize=5
+        capsize=3,
+        linewidth=0.8
     )
 
+    # ----------------------------------------------
+    # AXIS
+    # ----------------------------------------------
 
-    plt.ylabel(
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        df["Agent"]
+    )
+
+    ax.set_ylabel(
         "Mission time [s]"
     )
 
-    plt.title(
-        f"{group} - Mission time mean ± std"
+    # ----------------------------------------------
+    # GRID
+    # ----------------------------------------------
+
+    ax.grid(
+        axis="y",
+        linewidth=0.6,
+        alpha=0.4
     )
 
+    ax.set_axisbelow(True)
 
-    plt.grid(
-        axis="y"
-    )
+    # ----------------------------------------------
+    # SPINES
+    # ----------------------------------------------
 
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8)
 
-    plt.tight_layout()
+    # ----------------------------------------------
+    # LAYOUT
+    # ----------------------------------------------
 
+    fig.tight_layout()
 
-    plt.savefig(
+    # ----------------------------------------------
+    # SAVE
+    # ----------------------------------------------
+
+    fig.savefig(
         os.path.join(
             OUTPUT_DIR,
             f"{group}_mission_time.png"
         ),
-        dpi=300
+        dpi=300,
+        bbox_inches="tight"
     )
 
+    # Optional vector version for the paper
+    fig.savefig(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{group}_mission_time.pdf"
+        ),
+        bbox_inches="tight"
+    )
 
-    plt.close()
-
+    plt.close(fig)
 
 
 print("\nAggregation complete.")

@@ -1,12 +1,51 @@
 import os
 import glob
 import yaml
+import argparse
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from collections import defaultdict
+
+# ==========================================================
+# PLOT CONFIGURATION
+# ==========================================================
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--ral",
+    action="store_true",
+    help="Use RAL/IEEE paper plot formatting"
+)
+args = parser.parse_args()
+
+RAL_FIGSIZE = (4.0, 3.0)
+
+if args.ral:
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 8,
+        "axes.titlesize": 9,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7,
+        "ytick.labelsize": 7,
+        "legend.fontsize": 7,
+        "lines.linewidth": 1.2,
+        "lines.markersize": 0.1,
+        "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8,
+        "ytick.major.width": 0.8,
+        "figure.dpi": 150,
+        "savefig.dpi": 300,
+        "savefig.bbox": "tight",
+    })
+
+
+def get_figsize(default):
+    """Return the RAL figure size when --ral is enabled."""
+    return RAL_FIGSIZE if args.ral else default
 
 # ==========================================================
 # CONFIGURATION
@@ -590,7 +629,8 @@ def save(fig,folder,name):
             folder,
             name+".png"
         ),
-        dpi=300
+        dpi=300,
+        bbox_inches="tight"
     )
 
 # ==========================================================
@@ -659,7 +699,7 @@ def aggregate_trajectories(
 
 
         fig,ax=plt.subplots(
-            figsize=(7,7)
+            figsize=get_figsize((7,7))
         )
 
         ax.set_title(
@@ -753,7 +793,7 @@ def aggregate_priority(
 
 
         fig,ax=plt.subplots(
-            figsize=(10,5)
+            figsize=get_figsize((10,5))
         )
 
 
@@ -842,7 +882,7 @@ def aggregate_memory(
 
 
     fig,ax=plt.subplots(
-        figsize=(10,5)
+        figsize=get_figsize((10,5))
     )
 
 
@@ -957,7 +997,7 @@ def aggregate_battery(
         fig,axes=plt.subplots(
             1,
             2,
-            figsize=(12,4)
+            figsize=get_figsize((12,4))
         )
 
 
@@ -1243,7 +1283,7 @@ def aggregate_occupancy(
 
 
     fig,ax=plt.subplots(
-        figsize=(4,4)
+        figsize=get_figsize((4,4))
     )
 
 
@@ -1381,7 +1421,7 @@ def aggregate_waypoints(
 
 
     fig,ax=plt.subplots(
-        figsize=(8,5)
+        figsize=get_figsize((8,5))
     )
 
 
@@ -1507,7 +1547,7 @@ def aggregate_heading(
 
 
     fig,ax=plt.subplots(
-        figsize=(5,4)
+        figsize=get_figsize((5,4))
     )
 
 
@@ -1555,9 +1595,9 @@ def aggregate_compactness(data, time, output_folder, name):
     ]
 
     robot_labels = [
-        "ROSbot 1",
-        "ROSbot 2",
-        "ROSbot 3"
+        "Robot 1",
+        "Robot 2",
+        "Robot 3"
     ]
 
     distances = {
@@ -1664,7 +1704,7 @@ def aggregate_compactness(data, time, output_folder, name):
     # ==================================================
 
     fig, ax = plt.subplots(
-        figsize=(10, 5)
+        figsize=get_figsize((10, 5))
     )
 
     for robot, label in zip(
@@ -1724,9 +1764,9 @@ def compare_swarm_compactness(
     ]
 
     robot_labels = [
-        "ROSbot 1",
-        "ROSbot 2",
-        "ROSbot 3"
+        "Robot 1",
+        "Robot 2",
+        "Robot 3"
     ]
 
     def compute_mean_distances(data):
@@ -1821,7 +1861,7 @@ def compare_swarm_compactness(
     # ==================================================
 
     fig, ax = plt.subplots(
-        figsize=(12, 6)
+        figsize=get_figsize((12, 6))
     )
 
     for robot, label in zip(
@@ -1971,7 +2011,7 @@ def aggregate_mission_time(experiments, output_folder, name):
         else:
             std.append(np.nan)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=get_figsize((8, 5)))
 
     ax.bar(
         agents,
@@ -2097,7 +2137,7 @@ def compare_mission_time(
     # PLOT
     # ==================================================
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=get_figsize((8, 5)))
 
     x = np.arange(len(agents))
     width = 0.35
@@ -2362,7 +2402,7 @@ def aggregate_time_series(
 
 
         plt.figure(
-            figsize=(8,4)
+            figsize=get_figsize((8,4))
         )
 
 
@@ -2410,7 +2450,8 @@ def aggregate_time_series(
                 AGGREGATE_DIR,
                 f"{output_name}_{col}.png"
             ),
-            dpi=300
+            dpi=300,
+        bbox_inches="tight"
         )
 
 
@@ -2556,7 +2597,7 @@ def compare_occupancy(
     reward_mean = np.nanmean(reward_values)
     reward_std = np.nanstd(reward_values)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=get_figsize((6, 4)))
 
     x = np.arange(2)
 
@@ -2669,7 +2710,7 @@ def compare_heading(
 
 
     fig, ax = plt.subplots(
-        figsize=(7, 4)
+        figsize=get_figsize((7, 4))
     )
 
 
@@ -2894,7 +2935,7 @@ def compare_waypoints(
     width = 0.35
 
     fig, ax = plt.subplots(
-        figsize=(7, 4)
+        figsize=get_figsize((7, 4))
     )
 
     ax.bar(
@@ -3015,29 +3056,30 @@ def compare_waypoints(
         )
         for robot in robots
     ])
-
+    print("Equal mission 0:", np.mean(equal_mission[robots[0]]))
+    print("Equal mean:", equal_mean_total[0])
     # ==========================================================
     # WAYPOINT TIME AS % OF MISSION TIME
     # ==========================================================
 
-    equal_percentage = (
-        equal_mean_total
-        / equal_mission_mean
-        * 100
-    )
+    equal_percentage = np.array([
+        equal_mean_total[0]/ np.mean(equal_mission[robots[0]])* 100,
+        equal_mean_total[1]/ np.mean(equal_mission[robots[1]])* 100,
+        equal_mean_total[2]/ np.mean(equal_mission[robots[2]])* 100
+    ])
 
-    reward_percentage = (
-        reward_mean_total
-        / reward_mission_mean
-        * 100
-    )
+    reward_percentage = np.array([
+        reward_mean_total[0]/ np.mean(reward_mission[robots[0]])* 100,
+        reward_mean_total[1]/ np.mean(reward_mission[robots[1]])* 100,
+        reward_mean_total[2]/ np.mean(reward_mission[robots[2]])* 100
+    ])
 
     # ==========================================================
     # PERCENTAGE COMPARISON
     # ==========================================================
 
     fig, ax = plt.subplots(
-        figsize=(7, 4)
+        figsize=get_figsize((7, 4))
     )
 
     ax.bar(
