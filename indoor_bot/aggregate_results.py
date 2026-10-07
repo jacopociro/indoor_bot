@@ -1,29 +1,48 @@
 import os
+import re
 import glob
-import yaml
 import argparse
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from collections import defaultdict
 
-# ==========================================================
-# PLOT CONFIGURATION
-# ==========================================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(
+    description=(
+        "Genera i risultati per tutti gli esperimenti "
+        "delle configurazioni config1/config2/config3."
+    )
+)
+
+parser.add_argument(
+    "--base-path",
+    default="/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot",
+    help="Percorso base degli esperimenti."
+)
+
 parser.add_argument(
     "--ral",
     action="store_true",
-    help="Use RAL/IEEE paper plot formatting"
+    help="Usa il formato grafico IEEE RA-L."
 )
+
 args = parser.parse_args()
+
+BASE_PATH = args.base_path
+RAL_MODE = args.ral
+
+
+# ============================================================
+# RAL STYLE
+# ============================================================
 
 RAL_FIGSIZE = (4.0, 3.0)
 
-if args.ral:
+if RAL_MODE:
     plt.rcParams.update({
         "font.family": "serif",
         "font.size": 8,
@@ -40,32 +59,92 @@ if args.ral:
         "figure.dpi": 150,
         "savefig.dpi": 300,
         "savefig.bbox": "tight",
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
     })
 
 
-def get_figsize(default):
-    """Return the RAL figure size when --ral is enabled."""
-    return RAL_FIGSIZE if args.ral else default
+def get_figsize(default=(8, 5)):
+    if RAL_MODE:
+        return RAL_FIGSIZE
+    return default
 
-# ==========================================================
+
+# ============================================================
 # CONFIGURATION
-# ==========================================================
+# ============================================================
 
-BASE_PATH = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot"
-BASE_PATHS_EQUAL = [
-    os.path.join(BASE_PATH, f"exp_equal{i}")
-    for i in range(1, 11)
+CONFIG_NAMES = [
+    "config1",
+    "config2",
+    "config3",
 ]
 
-BASE_PATHS_REWARD = [
-    os.path.join(BASE_PATH, f"exp_reward{i}")
-    for i in range(1, 11)
+GROUPS = [
+    "equal",
+    "reward",
 ]
-OUTPUT_DIR = os.path.join(BASE_PATH, "aggregated_results")
-AGGREGATE_DIR = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/aggregated_results"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-WAYPOINT_FILE = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/config/waypoints.yaml"
+ROBOTS = [
+    "rosbot_1_0",
+    "rosbot_2_1",
+    "rosbot_3_2",
+]
+
+ROBOT_LABELS = {
+    "rosbot_1_0": "Robot 1",
+    "rosbot_2_1": "Robot 2",
+    "rosbot_3_2": "Robot 3",
+}
+
+ROBOT_COLORS = {
+    "rosbot_1_0": "tab:blue",
+    "rosbot_2_1": "tab:orange",
+    "rosbot_3_2": "tab:green",
+}
+
+
+# ============================================================
+# WAYPOINTS
+# ============================================================
+
+CONFIG_WAYPOINTS = {
+
+    "config1": np.array([
+        [-6.5, -1.0],
+        [3.0, 2.0],
+        [3.5, -3.5],
+        [-10.0, 2.0],
+        [4.0, -2.5],
+    ]),
+
+    "config2": np.array([
+        [-3.0, 0.0],
+        [5.0, 2.5],
+        [2.5, -4.5],
+        [-10.0, 0.0],
+        [5.0, -1.5],
+    ]),
+
+    "config3": np.array([
+        [-5.0, 2.0],
+        [4.0, 2.0],
+        [0.0, -3.0],
+        [-9.0, 3.0],
+        [-8.0, -1.0],
+    ]),
+}
+
+WAYPOINT_VISIT_THRESHOLD = 2.5
+N_WAYPOINTS = 5
+
+
+# ============================================================
+# GENERAL PARAMETERS
+# ============================================================
+
+DT = 0.05
+TIME_SAMPLES = 500
 
 MISSION_TIME_FILES = [
     "rosbot_1_0_mission_times.csv",
@@ -73,1520 +152,2258 @@ MISSION_TIME_FILES = [
     "rosbot_3_2_mission_times.csv",
 ]
 
-POSITION_FILES = [
-    "rosbot_1_0_position.csv",
-    "rosbot_2_1_position.csv",
-    "rosbot_3_2_position.csv",
-]
-
-ROBOTS = [
-    "rosbot_1_0",
-    "rosbot_2_1",
-    "rosbot_3_2"
-]
-
-DT = 0.05
-
-
-# ==========================================================
-# EXPERIMENTS
-# ==========================================================
-
-equal_experiments = sorted(
-    glob.glob(os.path.join(BASE_PATH, "exp_equal*"))
+CONFIG_COMPARISON_DIR = os.path.join(
+    BASE_PATH,
+    "configuration_comparison"
 )
 
-reward_experiments = sorted(
-    glob.glob(os.path.join(BASE_PATH, "exp_reward*"))
+# Nuova cartella:
+# Equal vs Reward mediato tra config1/config2/config3
+ALL_CONFIG_EQUAL_REWARD_DIR = os.path.join(
+    CONFIG_COMPARISON_DIR,
+    "equal_reward_all_configurations"
 )
 
-groups = {
-    "equal": equal_experiments,
-    "reward": reward_experiments
-}
 
-print("===================================")
-print("Experiments found")
-print("===================================")
+# ============================================================
+# UTILITY FUNCTIONS
+# ============================================================
 
-for k,v in groups.items():
-    print(k, len(v))
+def save(fig, folder, filename):
 
-# ==========================================================
-# UTILITIES
-# ==========================================================
+    os.makedirs(folder, exist_ok=True)
 
-def read_waypoints():
-
-    with open(WAYPOINT_FILE,"r") as f:
-        wp = yaml.safe_load(f)
-
-    return np.array(
-        [
-            [w["x"], w["y"]]
-            for w in wp["wp"]
-        ]
+    path = os.path.join(
+        folder,
+        filename
     )
 
-waypoints = read_waypoints()
+    fig.savefig(path)
+    plt.close(fig)
 
-# ==========================================================
-# MAX TIME
-# ==========================================================
+    print(f"Saved: {path}")
 
-def get_max_time(exp_folder):
+
+def mean_std(curves):
+
+    if len(curves) == 0:
+        return None, None
+
+    min_length = min(
+        len(curve)
+        for curve in curves
+    )
+
+    trimmed = np.array([
+        curve[:min_length]
+        for curve in curves
+    ])
+
+    mean = np.mean(
+        trimmed,
+        axis=0
+    )
+
+    std = np.std(
+        trimmed,
+        axis=0
+    )
+
+    return mean, std
+
+
+def safe_float(value):
+
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return np.nan
+
+
+# ============================================================
+# MISSION TIME
+# ============================================================
+
+def get_max_time(experiment_path):
 
     times = []
 
-    for file in MISSION_TIME_FILES:
+    for filename in MISSION_TIME_FILES:
 
-        df = pd.read_csv(
-            os.path.join(exp_folder,file)
+        path = os.path.join(
+            experiment_path,
+            filename
         )
 
-        times.append(
-            df["charging_completion_time"].max()
-        )
+        if not os.path.exists(path):
+            continue
+
+        try:
+
+            df = pd.read_csv(path)
+
+            if "charging_completion_time" in df.columns:
+
+                values = pd.to_numeric(
+                    df["charging_completion_time"],
+                    errors="coerce"
+                ).dropna()
+
+                if len(values) > 0:
+                    times.append(
+                        values.iloc[-1]
+                    )
+
+        except Exception as exc:
+
+            print(
+                f"Warning reading {path}: {exc}"
+            )
+
+    if len(times) == 0:
+        return None
 
     return max(times)
 
-# ==========================================================
-# COMMON TIME
-# ==========================================================
 
-def common_time(exp_folder):
+# ============================================================
+# CSV LOADING / INTERPOLATION
+# ============================================================
 
-    Tmax = get_max_time(exp_folder)
+def load_interpolated_csv(
+    path,
+    common_time
+):
 
-    return np.arange(
-        0,
-        Tmax,
-        DT
+    if not os.path.exists(path):
+        return None
+
+    try:
+
+        df = pd.read_csv(path)
+
+    except Exception as exc:
+
+        print(
+            f"Warning reading {path}: {exc}"
+        )
+
+        return None
+
+    if "time" not in df.columns:
+        return None
+
+    df = df.copy()
+
+    df["time"] = pd.to_numeric(
+        df["time"],
+        errors="coerce"
     )
 
-# ==========================================================
-# CSV
-# ==========================================================
-
-def load_csv(csv_file,max_time):
-
-    df = pd.read_csv(csv_file)
-
-    if "time" in df.columns:
-        df = df[df.time<=max_time]
-
-    return df.reset_index(drop=True)
-
-# ==========================================================
-# INTERPOLATION
-# ==========================================================
-
-def interpolate_signal(
-        time,
-        signal_time,
-        signal):
-
-    return np.interp(
-        time,
-        signal_time,
-        signal
+    df = df.dropna(
+        subset=["time"]
     )
 
-# ==========================================================
-# POSITION
-# ==========================================================
+    if len(df) == 0:
+        return None
 
-def load_position(
-        experiment,
-        robot, 
-        common_time):
-
-    Tmax = get_max_time(experiment)
-    t = common_time
-    file = os.path.join(
-        experiment,
-        robot+"_position.csv"
+    relative_time = (
+        df["time"].values
+        - df["time"].values[0]
     )
 
+    result = pd.DataFrame({
+        "time": common_time
+    })
 
-    if not os.path.exists(file):
-        return {}
+    for column in df.columns:
 
-
-    mem = pd.read_csv(file)
-
-
-    if mem.empty:
-        return {}
-
-
-    # ============================================
-    # gestione tempo assoluto
-    # ============================================
-
-    t0 = mem["time"].iloc[0]
-
-    t_end = t0 + Tmax
-
-
-    # taglio missione
-    mem = mem[
-        mem["time"] <= t_end
-    ]
-
-
-    if len(mem) > 2:
-        mem = mem.iloc[2:]
-
-
-    if mem.empty:
-        return {}
-
-
-    # tempo relativo alla missione
-
-    time = (
-        mem["time"].values.astype(float)
-        - t0
-    )
-
-
-    output = {}
-
-
-    for col in mem.columns:
-
-        if col == "time":
+        if column == "time":
             continue
 
-
-        values = (
-            mem[col]
-            .values
-            .astype(float)
+        numeric = pd.to_numeric(
+            df[column],
+            errors="coerce"
         )
 
+        valid = numeric.notna()
 
-        interp = interpolate_signal(
-            t,
-            time,
-            values
-        )
-
-
-        if interp is not None:
-            output[col] = interp
-
-
-    return output
-
-# ==========================================================
-# BATTERY
-# ==========================================================
-
-def load_battery(
-        experiment,
-        robot, 
-        common_time):
-
-    Tmax = get_max_time(experiment)
-    t = common_time
-    file = os.path.join(
-        experiment,
-        robot+"_battery.csv"
-    )
-
-
-
-    if not os.path.exists(file):
-        return {}
-
-
-    mem = pd.read_csv(file)
-
-
-    if mem.empty:
-        return {}
-
-
-    # ============================================
-    # gestione tempo assoluto
-    # ============================================
-
-    t0 = mem["time"].iloc[0]
-
-    t_end = t0 + Tmax
-
-
-    # taglio missione
-    mem = mem[
-        mem["time"] <= t_end
-    ]
-
-
-    if len(mem) > 2:
-        mem = mem.iloc[2:]
-
-
-    if mem.empty:
-        return {}
-
-
-    # tempo relativo alla missione
-
-    time = (
-        mem["time"].values.astype(float)
-        - t0
-    )
-
-
-    output = {}
-
-
-    for col in mem.columns:
-
-        if col == "time":
+        if valid.sum() == 0:
             continue
 
+        x = relative_time[valid.values]
+        y = numeric[valid].values
 
-        values = (
-            mem[col]
-            .values
-            .astype(float)
-        )
+        if len(x) == 1:
 
+            result[column] = np.full(
+                len(common_time),
+                y[0]
+            )
 
-        interp = interpolate_signal(
-            t,
-            time,
-            values
-        )
+        else:
 
+            result[column] = np.interp(
+                common_time,
+                x,
+                y
+            )
 
-        if interp is not None:
-            output[col] = interp
+    return result
 
 
-    return output
+# ============================================================
+# EXPERIMENT LOADING
+# ============================================================
 
-# ==========================================================
-# PRIORITY
-# ==========================================================
+def load_experiment(
+    experiment_path,
+    common_time
+):
 
-def load_priority(
-        experiment,
-        robot,
-        common_time):
-
-    Tmax=get_max_time(experiment)
-    t = common_time
-    file=os.path.join(
-        experiment,
-        robot+"_priority.csv"
-    )
-
-    if not os.path.exists(file):
-        return {}
-
-
-    mem = pd.read_csv(file)
-
-
-    if mem.empty:
-        return {}
-
-
-    # ============================================
-    # gestione tempo assoluto
-    # ============================================
-
-    t0 = mem["time"].iloc[0]
-
-    t_end = t0 + Tmax
-
-
-    # taglio missione
-    mem = mem[
-        mem["time"] <= t_end
-    ]
-
-
-    if len(mem) > 2:
-        mem = mem.iloc[2:]
-
-
-    if mem.empty:
-        return {}
-
-
-    # tempo relativo alla missione
-
-    time = (
-        mem["time"].values.astype(float)
-        - t0
-    )
-
-
-    output = {}
-
-
-    for col in mem.columns:
-
-        if col == "time":
-            continue
-
-
-        values = (
-            mem[col]
-            .values
-            .astype(float)
-        )
-
-
-        interp = interpolate_signal(
-            t,
-            time,
-            values
-        )
-
-
-        if interp is not None:
-            output[col] = interp
-
-
-    return output
-
-# ==========================================================
-# MEMORY
-# ==========================================================
-
-def load_memory(experiment, common_time):
-
-    Tmax=get_max_time(experiment)
-    t = common_time
-    memory_file = os.path.join(
-        experiment,
-        "memory_log.csv"
-    )
-
-    if not os.path.exists(memory_file):
-        return {}
-
-
-    mem = pd.read_csv(memory_file)
-
-
-    if mem.empty:
-        return {}
-
-
-    # ============================================
-    # gestione tempo assoluto
-    # ============================================
-
-    t0 = mem["time"].iloc[0]
-
-    t_end = t0 + Tmax
-
-
-    # taglio missione
-    mem = mem[
-        mem["time"] <= t_end
-    ]
-
-
-    if len(mem) > 2:
-        mem = mem.iloc[2:]
-
-
-    if mem.empty:
-        return {}
-
-
-    # tempo relativo alla missione
-
-    time = (
-        mem["time"].values.astype(float)
-        - t0
-    )
-
-
-    output = {}
-
-
-    for col in mem.columns:
-
-        if col == "time":
-            continue
-
-
-        values = (
-            mem[col]
-            .values
-            .astype(float)
-        )
-
-
-        interp = interpolate_signal(
-            t,
-            time,
-            values
-        )
-
-
-        if interp is not None:
-            output[col] = interp
-
-
-    return output
-
-# ==========================================================
-# LOAD COMPLETE EXPERIMENT
-# ==========================================================
-
-def load_experiment(exp, c_time):
-
-    experiment={}
-
-    experiment["time"]=common_time(exp)
-
-    experiment["robots"]={}
+    experiment_data = {}
 
     for robot in ROBOTS:
 
-        experiment["robots"][robot]={}
+        position_path = os.path.join(
+            experiment_path,
+            f"{robot}_position.csv"
+        )
 
-        experiment["robots"][robot]["position"]=\
-            load_position(exp,robot, c_time)
+        battery_path = os.path.join(
+            experiment_path,
+            f"{robot}_battery.csv"
+        )
 
-        experiment["robots"][robot]["battery"]=\
-            load_battery(exp,robot, c_time)
+        priority_path = os.path.join(
+            experiment_path,
+            f"{robot}_priority.csv"
+        )
 
-        experiment["robots"][robot]["priority"]=\
-            load_priority(exp,robot,c_time)
+        memory_path = os.path.join(
+            experiment_path,
+            f"{robot}_memory.csv"
+        )
 
-    experiment["memory"]=load_memory(exp,c_time)
+        experiment_data[robot] = {
 
-    return experiment
+            "position": load_interpolated_csv(
+                position_path,
+                common_time
+            ),
 
-# ==========================================================
-# LOAD GROUP
-# ==========================================================
+            "battery": load_interpolated_csv(
+                battery_path,
+                common_time
+            ),
 
-def load_group(exp_list):
-    # trova il massimo tempo del gruppo
-    max_group_time = max(
-        get_max_time(exp)
-        for exp in exp_list
+            "priority": load_interpolated_csv(
+                priority_path,
+                common_time
+            ),
+
+            "memory": load_interpolated_csv(
+                memory_path,
+                common_time
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Photosynthesis
+    # --------------------------------------------------------
+
+    photosynthesis_path = os.path.join(
+        experiment_path,
+        "photosynthesis.csv"
     )
 
-    # crea timeline comune
+    experiment_data["photosynthesis"] = (
+        load_interpolated_csv(
+            photosynthesis_path,
+            common_time
+        )
+    )
+
+    # --------------------------------------------------------
+    # Mission times
+    # --------------------------------------------------------
+
+    experiment_data["mission_times"] = {}
+
+    for robot in ROBOTS:
+
+        path = os.path.join(
+            experiment_path,
+            f"{robot}_mission_times.csv"
+        )
+
+        if os.path.exists(path):
+
+            try:
+
+                experiment_data[
+                    "mission_times"
+                ][robot] = pd.read_csv(path)
+
+            except Exception:
+
+                experiment_data[
+                    "mission_times"
+                ][robot] = None
+
+        else:
+
+            experiment_data[
+                "mission_times"
+            ][robot] = None
+
+    return experiment_data
+
+
+# ============================================================
+# LOAD GROUP
+# ============================================================
+
+def load_group(
+    experiment_list
+):
+
+    max_times = []
+
+    valid_experiments = []
+
+    for experiment_path in experiment_list:
+
+        max_time = get_max_time(
+            experiment_path
+        )
+
+        if max_time is None:
+            continue
+
+        max_times.append(
+            max_time
+        )
+
+        valid_experiments.append(
+            experiment_path
+        )
+
+    if len(max_times) == 0:
+
+        return {
+            "time": np.array([]),
+            "data": []
+        }
+
+    max_group_time = max(
+        max_times
+    )
+
     common_time = np.arange(
         0,
         max_group_time,
         0.1
     )
-    data=[]
 
-    for exp in exp_list:
+    data = []
 
-        print("Loading",exp)
+    for experiment_path in valid_experiments:
+
+        experiment_data = load_experiment(
+            experiment_path,
+            common_time
+        )
 
         data.append(
-            load_experiment(exp, common_time)
+            experiment_data
         )
 
-    return data, common_time
+    return {
+        "time": common_time,
+        "data": data
+    }
 
-# ==========================================================
-# MEAN STD
-# ==========================================================
 
-def mean_std(data):
-    lengths = [len(x) for x in data]
+# ============================================================
+# EXPERIMENT DISCOVERY
+# ============================================================
 
-    if len(set(lengths)) != 1:
-        print("ERROR: different lengths:")
-        print(lengths)
-        raise ValueError(
-            "Signals have different lengths"
-        )
-    data=np.asarray(data)
+def get_experiment_list(
+    config_name,
+    group
+):
 
-    return np.mean(data,axis=0),\
-           np.std(data,axis=0)
-
-# ==========================================================
-# SAVE FIGURE
-# ==========================================================
-
-def save(fig,folder,name):
-
-    fig.tight_layout()
-
-    fig.savefig(
-        os.path.join(
-            folder,
-            name+".png"
-        ),
-        dpi=300,
-        bbox_inches="tight"
+    config_path = os.path.join(
+        BASE_PATH,
+        config_name
     )
 
-# ==========================================================
-# CREATE OUTPUT FOLDERS
-# ==========================================================
+    experiments = []
 
-equal_output=os.path.join(
-    OUTPUT_DIR,
-    "equal"
-)
+    for i in range(1, 11):
 
-reward_output=os.path.join(
-    OUTPUT_DIR,
-    "reward"
-)
+        experiment_path = os.path.join(
+            config_path,
+            f"exp_{group}{i}"
+        )
 
-os.makedirs(equal_output,exist_ok=True)
-os.makedirs(reward_output,exist_ok=True)
+        if os.path.isdir(
+            experiment_path
+        ):
+            experiments.append(
+                experiment_path
+            )
 
-print("\nLoading Equal experiments...\n")
-equal_data, equal_time=load_group(equal_experiments)
-
-print("\nLoading Reward experiments...\n")
-reward_data, reward_time=load_group(reward_experiments)
-
-print("\nData loading completed.")
-
-# ==========================================================
-# PART 2
-# TIME SERIES AGGREGATION
-# ==========================================================
+    return experiments
 
 
-# ==========================================================
-# TRAJECTORIES
-# ==========================================================
+# ============================================================
+# AGGREGATE TRAJECTORIES
+# ============================================================
 
 def aggregate_trajectories(
-        experiments,
-        output_folder,
-        time,
-        group_name):
+    group_data,
+    output_folder
+):
 
+    if len(group_data["data"]) == 0:
+        return
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
     for robot in ROBOTS:
 
-        x_data=[]
-        y_data=[]
+        trajectories = []
 
+        for experiment in group_data["data"]:
 
-        for exp in experiments:
+            df = experiment[
+                robot
+            ]["position"]
 
-            pos = exp["robots"][robot]["position"]
+            if df is None:
+                continue
 
-            x_data.append(
-                pos["x"]
+            if (
+                "x" not in df.columns
+                or "y" not in df.columns
+            ):
+                continue
+
+            trajectories.append(
+                (
+                    df["x"].values,
+                    df["y"].values
+                )
             )
 
-            y_data.append(
-                pos["y"]
-            )
-
-
-        x_mean,x_std = mean_std(x_data)
-        y_mean,y_std = mean_std(y_data)
-
-
-        fig,ax=plt.subplots(
-            figsize=get_figsize((7,7))
-        )
-
-        ax.set_title(
-            f"{group_name} - {robot} mean trajectory"
-        )
-
-        ax.set_xlabel("x [m]")
-        ax.set_ylabel("y [m]")
-
-        ax.set_aspect("equal")
-
-
-        # trajectories individuali leggere
-        for x,y in zip(x_data,y_data):
+        for x, y in trajectories:
 
             ax.plot(
                 x,
                 y,
-                alpha=0.15
+                alpha=0.25,
+                linewidth=0.8,
+                color=ROBOT_COLORS[robot]
             )
 
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.set_title("Aggregated trajectories")
 
-        # traiettoria media
+    ax.grid(
+        alpha=0.25
+    )
 
-        ax.plot(
-            x_mean,
-            y_mean,
-            linewidth=3,
-            label="mean"
-        )
+    ax.set_aspect(
+        "equal",
+        adjustable="box"
+    )
 
-
-        # deviazione standard come banda
-        ax.fill_between(
-            x_mean,
-            y_mean-y_std,
-            y_mean+y_std,
-            alpha=0.25,
-            label="std"
-        )
-
-
-        for i,wp in enumerate(waypoints):
-
-            ax.scatter(
-                wp[0],
-                wp[1],
-                marker="*",
-                s=120,
-                label=f"WP{i+1}"
-            )
+    save(
+        fig,
+        output_folder,
+        "trajectories.png"
+    )
 
 
-        ax.legend()
-
-        save(
-            fig,
-            output_folder,
-            f"trajectory_{robot}"
-        )
-
-        plt.close(fig)
-
-
-
-# ==========================================================
-# PRIORITY
-# ==========================================================
-
+# ============================================================
+# AGGREGATE PRIORITY
+# ============================================================
 
 def aggregate_priority(
-        experiments,
-        output_folder,
-        time,
-        group_name):
+    group_data,
+    output_folder
+):
 
+    if len(group_data["data"]) == 0:
+        return
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    time = group_data["time"]
 
     for robot in ROBOTS:
 
+        curves = []
 
-        priority_names = list(
-            experiments[0]
-            ["robots"]
-            [robot]
-            ["priority"]
-            .keys()
-        )
+        for experiment in group_data["data"]:
 
-        if "time" in priority_names:
-            priority_names.remove("time")
+            df = experiment[
+                robot
+            ]["priority"]
 
+            if (
+                df is None
+                or "priority" not in df.columns
+            ):
+                continue
 
-        fig,ax=plt.subplots(
-            figsize=get_figsize((10,5))
-        )
-
-
-        t = time
-
-
-        for p in priority_names:
-
-
-            values=[]
-
-
-            for exp in experiments:
-
-                values.append(
-                    exp["robots"]
-                    [robot]
-                    ["priority"]
-                    [p]
-                )
-
-
-            mean,std=mean_std(values)
-
-
-            ax.plot(
-                t,
-                mean,
-                label=p
+            curves.append(
+                df["priority"].values
             )
 
+        if len(curves) == 0:
+            continue
 
-            ax.fill_between(
-                t,
-                mean-std,
-                mean+std,
-                alpha=0.2
-            )
-
-
-        ax.set_title(
-            f"{group_name} - {robot} priority"
+        mean, std = mean_std(
+            curves
         )
-
-        ax.set_xlabel(
-            "Time [s]"
-        )
-
-        ax.set_ylabel(
-            "Priority"
-        )
-
-
-        ax.legend()
-
-        save(
-            fig,
-            output_folder,
-            f"priority_{robot}"
-        )
-
-        plt.close(fig)
-
-
-
-# ==========================================================
-# MEMORY
-# ==========================================================
-
-
-def aggregate_memory(
-        experiments,
-        output_folder,
-        time,
-        group_name):
-
-
-    memory_names=list(
-        experiments[0]
-        ["memory"]
-        .keys()
-    )
-
-    if "time" in memory_names:
-        memory_names.remove("time")
-
-
-    fig,ax=plt.subplots(
-        figsize=get_figsize((10,5))
-    )
-
-
-    t=time
-
-
-    for m in memory_names:
-
-
-        values=[]
-
-
-        for exp in experiments:
-
-            values.append(
-                exp["memory"][m]
-            )
-
-
-        mean,std=mean_std(values)
-
 
         ax.plot(
-            t,
+            time[:len(mean)],
             mean,
-            label=m
+            label=ROBOT_LABELS[robot]
         )
-
 
         ax.fill_between(
-            t,
-            mean-std,
-            mean+std,
-            alpha=0.2
+            time[:len(mean)],
+            mean - std,
+            mean + std,
+            alpha=0.15
         )
 
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Priority")
+    ax.set_title("Priority")
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "priority.png"
+    )
+
+
+# ============================================================
+# AGGREGATE BATTERY
+# ============================================================
+
+def aggregate_battery(
+    group_data,
+    output_folder
+):
+
+    if len(group_data["data"]) == 0:
+        return
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    time = group_data["time"]
+
+    for robot in ROBOTS:
+
+        curves = []
+
+        for experiment in group_data["data"]:
+
+            df = experiment[
+                robot
+            ]["battery"]
+
+            if df is None:
+                continue
+
+            numeric = df.select_dtypes(
+                include=[np.number]
+            )
+
+            if numeric.shape[1] == 0:
+                continue
+
+            curves.append(
+                numeric.iloc[:, 0].values
+            )
+
+        if len(curves) == 0:
+            continue
+
+        mean, std = mean_std(
+            curves
+        )
+
+        ax.plot(
+            time[:len(mean)],
+            mean,
+            label=ROBOT_LABELS[robot]
+        )
+
+        ax.fill_between(
+            time[:len(mean)],
+            mean - std,
+            mean + std,
+            alpha=0.15
+        )
+
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Battery")
+    ax.set_title("Battery")
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "battery.png"
+    )
+
+
+# ============================================================
+# AGGREGATE MEMORY
+# ============================================================
+
+def aggregate_memory(
+    group_data,
+    output_folder
+):
+
+    if len(group_data["data"]) == 0:
+        return
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    time = group_data["time"]
+
+    curves = []
+
+    for experiment in group_data["data"]:
+
+        for robot in ROBOTS:
+
+            df = experiment[
+                robot
+            ]["memory"]
+
+            if df is None:
+                continue
+
+            numeric = df.select_dtypes(
+                include=[np.number]
+            )
+
+            if numeric.shape[1] == 0:
+                continue
+
+            curves.append(
+                numeric.iloc[:, 0].values
+            )
+
+    if len(curves) > 0:
+
+        mean, std = mean_std(
+            curves
+        )
+
+        ax.plot(
+            time[:len(mean)],
+            mean,
+            label="Memory"
+        )
+
+        ax.fill_between(
+            time[:len(mean)],
+            mean - std,
+            mean + std,
+            alpha=0.15
+        )
+
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Memory")
+    ax.set_title("Memory")
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "memory.png"
+    )
+
+
+# ============================================================
+# COMPACTNESS
+# ============================================================
+
+def compute_compactness_curves(
+    group_data
+):
+
+    time = group_data["time"]
+
+    curves = []
+
+    for experiment in group_data["data"]:
+
+        robot_positions = []
+
+        for robot in ROBOTS:
+
+            df = experiment[
+                robot
+            ]["position"]
+
+            if df is None:
+                continue
+
+            if (
+                "x" not in df.columns
+                or "y" not in df.columns
+            ):
+                continue
+
+            robot_positions.append(
+                np.column_stack([
+                    df["x"].values,
+                    df["y"].values
+                ])
+            )
+
+        if len(robot_positions) < 2:
+            continue
+
+        min_length = min(
+            len(pos)
+            for pos in robot_positions
+        )
+
+        compactness = []
+
+        for i in range(min_length):
+
+            positions = np.array([
+                pos[i]
+                for pos in robot_positions
+            ])
+
+            centroid = np.mean(
+                positions,
+                axis=0
+            )
+
+            distances = np.linalg.norm(
+                positions - centroid,
+                axis=1
+            )
+
+            compactness.append(
+                np.mean(distances)
+            )
+
+        curves.append(
+            np.array(compactness)
+        )
+
+    if len(curves) == 0:
+        return time, None
+
+    mean, std = mean_std(
+        curves
+    )
+
+    return time[:len(mean)], (
+        mean,
+        std
+    )
+
+
+def aggregate_compactness(
+    group_data,
+    output_folder
+):
+
+    time, result = compute_compactness_curves(
+        group_data
+    )
+
+    if result is None:
+        return
+
+    mean, std = result
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    ax.plot(
+        time,
+        mean,
+        label="Compactness"
+    )
+
+    ax.fill_between(
+        time,
+        mean - std,
+        mean + std,
+        alpha=0.15
+    )
+
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Mean distance [m]")
+    ax.set_title("Swarm compactness")
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "compactness.png"
+    )
+
+
+# ============================================================
+# WAYPOINT VISIT COUNT
+# ============================================================
+
+def count_waypoint_visits(
+    position_df,
+    waypoint
+):
+
+    if position_df is None:
+        return 0
+
+    if (
+        "x" not in position_df.columns
+        or "y" not in position_df.columns
+    ):
+        return 0
+
+    x = pd.to_numeric(
+        position_df["x"],
+        errors="coerce"
+    ).values
+
+    y = pd.to_numeric(
+        position_df["y"],
+        errors="coerce"
+    ).values
+
+    valid = (
+        np.isfinite(x)
+        & np.isfinite(y)
+    )
+
+    x = x[valid]
+    y = y[valid]
+
+    if len(x) == 0:
+        return 0
+
+    distances = np.sqrt(
+        (x - waypoint[0]) ** 2
+        + (y - waypoint[1]) ** 2
+    )
+
+    inside = (
+        distances
+        <= WAYPOINT_VISIT_THRESHOLD
+    )
+
+    if inside[0]:
+        visits = 1
+    else:
+        visits = 0
+
+    for i in range(1, len(inside)):
+
+        if (
+            inside[i]
+            and not inside[i - 1]
+        ):
+            visits += 1
+
+    return visits
+
+
+def aggregate_waypoint_visits(
+    experiment_list,
+    config_name,
+    group,
+    output_folder
+):
+
+    waypoints = CONFIG_WAYPOINTS[
+        config_name
+    ]
+
+    rows = []
+
+    for experiment_index, experiment_path in enumerate(
+        experiment_list,
+        start=1
+    ):
+
+        row = {
+            "experiment": experiment_index
+        }
+
+        total_visits = 0
+
+        for robot in ROBOTS:
+
+            position_path = os.path.join(
+                experiment_path,
+                f"{robot}_position.csv"
+            )
+
+            if not os.path.exists(
+                position_path
+            ):
+
+                for waypoint_index in range(
+                    N_WAYPOINTS
+                ):
+                    row[
+                        f"{robot}_waypoint_{waypoint_index + 1}"
+                    ] = 0
+
+                row[
+                    f"{robot}_total"
+                ] = 0
+
+                continue
+
+            try:
+
+                position_df = pd.read_csv(
+                    position_path
+                )
+
+            except Exception:
+
+                position_df = None
+
+            robot_total = 0
+
+            for waypoint_index, waypoint in enumerate(
+                waypoints
+            ):
+
+                visits = count_waypoint_visits(
+                    position_df,
+                    waypoint
+                )
+
+                row[
+                    f"{robot}_waypoint_{waypoint_index + 1}"
+                ] = visits
+
+                robot_total += visits
+
+            row[
+                f"{robot}_total"
+            ] = robot_total
+
+            total_visits += robot_total
+
+        row["total_visits"] = total_visits
+
+        rows.append(row)
+
+    if len(rows) == 0:
+        return
+
+    statistics_df = pd.DataFrame(
+        rows
+    )
+
+    csv_path = os.path.join(
+        output_folder,
+        "waypoint_visit_statistics.csv"
+    )
+
+    statistics_df.to_csv(
+        csv_path,
+        index=False
+    )
+
+    print(
+        f"Saved: {csv_path}"
+    )
+
+    # --------------------------------------------------------
+    # Mean visits per waypoint
+    # --------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    for robot in ROBOTS:
+
+        means = []
+
+        for waypoint_index in range(
+            N_WAYPOINTS
+        ):
+
+            column = (
+                f"{robot}_waypoint_"
+                f"{waypoint_index + 1}"
+            )
+
+            if column in statistics_df:
+
+                means.append(
+                    statistics_df[column].mean()
+                )
+
+            else:
+
+                means.append(0)
+
+        ax.plot(
+            range(
+                1,
+                N_WAYPOINTS + 1
+            ),
+            means,
+            marker="o",
+            label=ROBOT_LABELS[robot]
+        )
+
+    ax.set_xlabel("Waypoint")
+    ax.set_ylabel("Mean number of visits")
+    ax.set_title(
+        f"Waypoint visits - {config_name} - {group}"
+    )
+
+    ax.set_xticks(
+        range(
+            1,
+            N_WAYPOINTS + 1
+        )
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend()
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_visits.png"
+    )
+
+
+# ============================================================
+# PROCESS CONFIGURATION
+# ============================================================
+
+def process_configuration(
+    config_name
+):
+
+    config_results = {}
+
+    for group in GROUPS:
+
+        experiments = get_experiment_list(
+            config_name,
+            group
+        )
+
+        print(
+            f"\n{config_name} - {group}: "
+            f"{len(experiments)} experiments"
+        )
+
+        group_data = load_group(
+            experiments
+        )
+
+        config_results[group] = {
+            "experiments": experiments,
+            "data": group_data
+        }
+
+        output_folder = os.path.join(
+            BASE_PATH,
+            config_name,
+            "aggregated_results",
+            group
+        )
+
+        os.makedirs(
+            output_folder,
+            exist_ok=True
+        )
+
+        aggregate_trajectories(
+            group_data,
+            output_folder
+        )
+
+        aggregate_priority(
+            group_data,
+            output_folder
+        )
+
+        aggregate_battery(
+            group_data,
+            output_folder
+        )
+
+        aggregate_memory(
+            group_data,
+            output_folder
+        )
+
+        aggregate_compactness(
+            group_data,
+            output_folder
+        )
+
+        aggregate_waypoint_visits(
+            experiments,
+            config_name,
+            group,
+            output_folder
+        )
+
+    return config_results
+
+
+# ============================================================
+# CONFIGURATION COMPARISON
+# ============================================================
+
+def compare_time_series(
+    configuration_results,
+    group,
+    metric,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    found = False
+
+    for config_index, config_name in enumerate(
+        CONFIG_NAMES
+    ):
+
+        if config_name not in configuration_results:
+            continue
+
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
+
+        group_result = configuration_results[
+            config_name
+        ][group]
+
+        group_data = group_result["data"]
+
+        time = group_data["time"]
+
+        curves_by_robot = {}
+
+        for robot in ROBOTS:
+            curves_by_robot[robot] = []
+
+        for experiment in group_data["data"]:
+
+            for robot in ROBOTS:
+
+                if metric == "priority":
+
+                    df = experiment[
+                        robot
+                    ]["priority"]
+
+                    if (
+                        df is None
+                        or "priority" not in df.columns
+                    ):
+                        continue
+
+                    curves_by_robot[
+                        robot
+                    ].append(
+                        df["priority"].values
+                    )
+
+                elif metric == "battery":
+
+                    df = experiment[
+                        robot
+                    ]["battery"]
+
+                    if df is None:
+                        continue
+
+                    numeric = df.select_dtypes(
+                        include=[np.number]
+                    )
+
+                    if numeric.shape[1] == 0:
+                        continue
+
+                    curves_by_robot[
+                        robot
+                    ].append(
+                        numeric.iloc[:, 0].values
+                    )
+
+        for robot in ROBOTS:
+
+            curves = curves_by_robot[
+                robot
+            ]
+
+            if len(curves) == 0:
+                continue
+
+            mean, std = mean_std(
+                curves
+            )
+
+            label = (
+                f"{config_name.capitalize()} "
+                f"{ROBOT_LABELS[robot]}"
+            )
+
+            ax.plot(
+                time[:len(mean)],
+                mean,
+                label=label
+            )
+
+            ax.fill_between(
+                time[:len(mean)],
+                mean - std,
+                mean + std,
+                alpha=0.08
+            )
+
+            found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Time [s]"
+    )
+
+    if metric == "priority":
+        ax.set_ylabel("Priority")
+
+    elif metric == "battery":
+        ax.set_ylabel("Battery")
 
     ax.set_title(
-        f"{group_name} - Memory"
+        f"{metric.capitalize()} - "
+        f"{group.capitalize()}"
     )
+
+    ax.legend(
+        ncol=2
+    )
+
+    ax.grid(
+        alpha=0.25
+    )
+
+    save(
+        fig,
+        output_folder,
+        f"{metric}_configurations.png"
+    )
+
+
+# ============================================================
+# CONFIGURATION WAYPOINT COMPARISON
+# ============================================================
+
+def compare_waypoint_visits_configurations(
+    configuration_results,
+    group,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    found = False
+
+    x = np.arange(
+        1,
+        N_WAYPOINTS + 1
+    )
+
+    for config_index, config_name in enumerate(
+        CONFIG_NAMES
+    ):
+
+        if config_name not in configuration_results:
+            continue
+
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
+
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
+
+        waypoints = CONFIG_WAYPOINTS[
+            config_name
+        ]
+
+        all_robot_means = []
+
+        for robot in ROBOTS:
+
+            waypoint_visits = []
+
+            for waypoint_index, waypoint in enumerate(
+                waypoints
+            ):
+
+                values = []
+
+                for experiment_path in experiments:
+
+                    position_path = os.path.join(
+                        experiment_path,
+                        f"{robot}_position.csv"
+                    )
+
+                    if not os.path.exists(
+                        position_path
+                    ):
+                        continue
+
+                    try:
+
+                        df = pd.read_csv(
+                            position_path
+                        )
+
+                    except Exception:
+
+                        continue
+
+                    values.append(
+                        count_waypoint_visits(
+                            df,
+                            waypoint
+                        )
+                    )
+
+                if len(values) > 0:
+                    waypoint_visits.append(
+                        np.mean(values)
+                    )
+                else:
+                    waypoint_visits.append(0)
+
+            all_robot_means.append(
+                waypoint_visits
+            )
+
+        for robot_index, robot in enumerate(
+            ROBOTS
+        ):
+
+            ax.plot(
+                x,
+                all_robot_means[
+                    robot_index
+                ],
+                marker="o",
+                label=(
+                    f"{config_name.capitalize()} "
+                    f"{ROBOT_LABELS[robot]}"
+                )
+            )
+
+            found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Waypoint"
+    )
+
+    ax.set_ylabel(
+        "Mean number of visits"
+    )
+
+    ax.set_title(
+        f"Waypoint visits - "
+        f"{group.capitalize()}"
+    )
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.grid(
+        alpha=0.25
+    )
+
+    ax.legend(
+        ncol=2
+    )
+
+    save(
+        fig,
+        output_folder,
+        f"waypoint_visits_{group}_configurations.png"
+    )
+
+
+# ============================================================
+# EQUAL VS REWARD TIME SERIES
+# ============================================================
+
+def compare_equal_reward_time_series(
+    configuration_results,
+    config_name,
+    metric,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    found = False
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
+
+        group_result = configuration_results[
+            config_name
+        ][group]
+
+        group_data = group_result["data"]
+
+        time = group_data["time"]
+
+        if metric == "memory":
+
+            curves = []
+
+            for experiment in group_data["data"]:
+
+                for robot in ROBOTS:
+
+                    df = experiment[
+                        robot
+                    ]["memory"]
+
+                    if df is None:
+                        continue
+
+                    numeric = df.select_dtypes(
+                        include=[np.number]
+                    )
+
+                    if numeric.shape[1] == 0:
+                        continue
+
+                    curves.append(
+                        numeric.iloc[:, 0].values
+                    )
+
+            if len(curves) == 0:
+                continue
+
+            mean, std = mean_std(
+                curves
+            )
+
+            ax.plot(
+                time[:len(mean)],
+                mean,
+                label=group.capitalize()
+            )
+
+            ax.fill_between(
+                time[:len(mean)],
+                mean - std,
+                mean + std,
+                alpha=0.08
+            )
+
+            found = True
+
+        else:
+
+            for robot in ROBOTS:
+
+                curves = []
+
+                for experiment in group_data["data"]:
+
+                    if metric == "priority":
+
+                        df = experiment[
+                            robot
+                        ]["priority"]
+
+                        if (
+                            df is None
+                            or "priority" not in df.columns
+                        ):
+                            continue
+
+                        curves.append(
+                            df["priority"].values
+                        )
+
+                    elif metric == "battery":
+
+                        df = experiment[
+                            robot
+                        ]["battery"]
+
+                        if df is None:
+                            continue
+
+                        numeric = df.select_dtypes(
+                            include=[np.number]
+                        )
+
+                        if numeric.shape[1] == 0:
+                            continue
+
+                        curves.append(
+                            numeric.iloc[:, 0].values
+                        )
+
+                if len(curves) == 0:
+                    continue
+
+                mean, std = mean_std(
+                    curves
+                )
+
+                ax.plot(
+                    time[:len(mean)],
+                    mean,
+                    label=(
+                        f"{group.capitalize()} "
+                        f"{ROBOT_LABELS[robot]}"
+                    )
+                )
+
+                ax.fill_between(
+                    time[:len(mean)],
+                    mean - std,
+                    mean + std,
+                    alpha=0.08
+                )
+
+                found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
 
     ax.set_xlabel(
         "Time [s]"
     )
 
     ax.set_ylabel(
-        "Memory value"
+        metric.capitalize()
     )
-
-
-    ax.legend()
-
-
-    save(
-        fig,
-        output_folder,
-        "memory"
-    )
-
-    plt.close(fig)
-
-
-
-# ==========================================================
-# BATTERY
-# ==========================================================
-
-
-def aggregate_battery(
-        experiments,
-        output_folder,
-        time,
-        group_name):
-
-
-    for robot in ROBOTS:
-
-
-        t=time
-
-
-        # --------------------
-        # Percentage
-        # --------------------
-
-        percentage=[]
-
-
-        voltage=[]
-
-
-        for exp in experiments:
-
-            batt=exp["robots"][robot]["battery"]
-
-
-            if "percentage" in batt:
-
-                percentage.append(
-                    batt["percentage"]
-                )
-
-
-            if "voltage" in batt:
-
-                voltage.append(
-                    batt["voltage"]
-                )
-
-
-
-        fig,axes=plt.subplots(
-            1,
-            2,
-            figsize=get_figsize((12,4))
-        )
-
-
-        if len(percentage)>0:
-
-
-            mean,std=mean_std(
-                percentage
-            )
-
-
-            axes[0].plot(
-                t,
-                mean,
-                label="mean"
-            )
-
-
-            axes[0].fill_between(
-                t,
-                mean-std,
-                mean+std,
-                alpha=0.25
-            )
-
-
-        axes[0].set_title(
-            f"{group_name} {robot} battery %"
-        )
-
-        axes[0].set_xlabel(
-            "Time [s]"
-        )
-
-        axes[0].set_ylabel(
-            "%"
-        )
-
-        axes[0].set_ylim(
-            0,
-            100
-        )
-
-
-        # --------------------
-        # Voltage
-        # --------------------
-
-
-        if len(voltage)>0:
-
-
-            mean,std=mean_std(
-                voltage
-            )
-
-
-            axes[1].plot(
-                t,
-                mean,
-                label="mean"
-            )
-
-
-            axes[1].fill_between(
-                t,
-                mean-std,
-                mean+std,
-                alpha=0.25
-            )
-
-
-        axes[1].set_title(
-            f"{group_name} {robot} voltage"
-        )
-
-        axes[1].set_xlabel(
-            "Time [s]"
-        )
-
-        axes[1].set_ylabel(
-            "Voltage [V]"
-        )
-
-
-        save(
-            fig,
-            output_folder,
-            f"battery_{robot}"
-        )
-
-
-        plt.close(fig)
-
-
-
-# ==========================================================
-# EXECUTION PART 2
-# ==========================================================
-
-
-print("\nGenerating Equal time-series plots")
-
-aggregate_trajectories(
-    equal_data,
-    equal_output,
-    equal_time,
-    "equal"
-)
-
-aggregate_priority(
-    equal_data,
-    equal_output,
-    equal_time,
-    "equal"
-)
-
-aggregate_memory(
-    equal_data,
-    equal_output,
-    equal_time,
-    "equal"
-)
-
-aggregate_battery(
-    equal_data,
-    equal_output,
-    equal_time,
-    "equal"
-)
-
-
-
-print("\nGenerating Reward time-series plots")
-
-
-aggregate_trajectories(
-    reward_data,
-    reward_output,
-    reward_time,
-    "reward"
-)
-
-aggregate_priority(
-    reward_data,
-    reward_output,
-    reward_time,
-    "reward"
-)
-
-aggregate_memory(
-    reward_data,
-    reward_output,
-    reward_time,
-    "reward"
-)
-
-aggregate_battery(
-    reward_data,
-    reward_output,
-    reward_time,
-    "reward"
-)
-
-
-print("\nTime series aggregation completed.")
-# ==========================================================
-# PART 3
-# FINAL METRICS AGGREGATION
-# ==========================================================
-
-
-import re
-
-
-# ==========================================================
-# LOAD CSV RESULTS
-# ==========================================================
-
-
-def read_summary_csv(experiment):
-
-    file = os.path.join(
-        experiment,
-        "plots",
-        "summary.csv"
-    )
-
-    if not os.path.exists(file):
-        return None
-
-    return pd.read_csv(file)
-
-
-
-def read_occupancy(experiment):
-
-    file = os.path.join(
-        experiment,
-        "plots",
-        "results.log"
-    )
-
-
-    if not os.path.exists(file):
-        return np.nan
-
-
-    with open(file,"r") as f:
-
-        for line in f:
-
-            if "Occupancy %" in line:
-
-                value=re.findall(
-                    r"[-+]?\d*\.\d+",
-                    line
-                )
-
-                if value:
-                    return float(value[0])
-
-
-    return np.nan
-
-
-
-# ==========================================================
-# OCCUPANCY
-# ==========================================================
-
-
-def aggregate_occupancy(
-        experiments,
-        output_folder,
-        name):
-
-
-    values=[]
-
-
-    for exp in experiments:
-
-        values.append(
-            read_occupancy(exp)
-        )
-
-
-    values=np.array(
-        values,
-        dtype=float
-    )
-
-
-    mean=np.nanmean(values)
-    std=np.nanstd(values)
-
-
-    df=pd.DataFrame({
-
-        "metric":[
-            "occupancy"
-        ],
-
-        "mean":[
-            mean
-        ],
-
-        "std":[
-            std
-        ]
-
-    })
-
-
-    df.to_csv(
-        os.path.join(
-            output_folder,
-            "occupancy_statistics.csv"
-        ),
-        index=False
-    )
-
-
-    fig,ax=plt.subplots(
-        figsize=get_figsize((4,4))
-    )
-
-
-    ax.bar(
-        [name],
-        [mean],
-        yerr=[std],
-        capsize=5
-    )
-
-
-    ax.set_ylabel(
-        "Occupancy [%]"
-    )
-
 
     ax.set_title(
-        f"{name} occupancy"
+        f"{config_name.capitalize()} - "
+        f"{metric.capitalize()}"
     )
 
+    ax.legend(
+        ncol=2
+    )
+
+    ax.grid(
+        alpha=0.25
+    )
 
     save(
         fig,
         output_folder,
-        "occupancy_mean"
+        f"{metric}_equal_reward.png"
     )
 
 
-    plt.close(fig)
+# ============================================================
+# EQUAL VS REWARD PHOTOSYNTHESIS
+# ============================================================
 
+def compare_equal_reward_photosynthesis(
+    configuration_results,
+    config_name,
+    output_folder
+):
 
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
+    found = False
 
-# ==========================================================
-# WAYPOINT STATISTICS
-# ==========================================================
+    for group in [
+        "equal",
+        "reward"
+    ]:
 
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
 
-def aggregate_waypoints(
-        experiments,
-        output_folder,
-        name):
+        group_data = configuration_results[
+            config_name
+        ][group]["data"]
 
+        time = group_data["time"]
 
-    data=[]
+        curves = []
 
+        for experiment in group_data["data"]:
 
-    for exp in experiments:
+            df = experiment[
+                "photosynthesis"
+            ]
 
+            if df is None:
+                continue
 
-        file=os.path.join(
-            exp,
-            "plots",
-            "waypoint_statistics.csv"
+            numeric_columns = [
+                column
+                for column in df.columns
+                if column != "time"
+            ]
+
+            if len(numeric_columns) == 0:
+                continue
+
+            values = pd.to_numeric(
+                df[numeric_columns[0]],
+                errors="coerce"
+            ).values
+
+            if len(values) == 0:
+                continue
+
+            curves.append(values)
+
+        if len(curves) == 0:
+            continue
+
+        mean, std = mean_std(
+            curves
         )
 
+        ax.plot(
+            time[:len(mean)],
+            mean,
+            label=group.capitalize()
+        )
 
-        if os.path.exists(file):
+        ax.fill_between(
+            time[:len(mean)],
+            mean - std,
+            mean + std,
+            alpha=0.08
+        )
 
-            df=pd.read_csv(
-                file,
-                index_col=0
-            )
+        found = True
 
-            data.append(df)
+    if not found:
 
-
-
-    if len(data)==0:
+        plt.close(fig)
         return
 
-
-
-    stack=np.array(
-        [
-            d.values
-            for d in data
-        ]
-    )
-
-
-    mean=np.mean(
-        stack,
-        axis=0
-    )
-
-
-    std=np.std(
-        stack,
-        axis=0
-    )
-
-
-    robots=[
-        "Robot1",
-        "Robot2",
-        "Robot3"
-    ]
-
-
-    wp_labels=[
-        f"WP{i+1}"
-        for i in range(mean.shape[1])
-    ]
-
-
-    result=[]
-
-
-    for r in range(3):
-
-        for w in range(mean.shape[1]):
-
-            result.append({
-
-                "robot":robots[r],
-                "waypoint":wp_labels[w],
-                "mean":mean[r,w],
-                "std":std[r,w]
-
-            })
-
-
-    pd.DataFrame(result).to_csv(
-        os.path.join(
-            output_folder,
-            "waypoint_statistics_mean.csv"
-        ),
-        index=False
-    )
-
-
-
-    # stacked bar
-
-
-    fig,ax=plt.subplots(
-        figsize=get_figsize((8,5))
-    )
-
-
-    bottom=np.zeros(3)
-
-
-    for w in range(mean.shape[1]):
-
-
-        # ax.bar(
-        #     robots,
-        #     mean[:,w],
-        #     bottom=bottom,
-        #     yerr=std[:,w],
-        #     capsize=3,
-        #     label=wp_labels[w]
-        # )
-
-
-        bottom+=mean[:,w]
-
-    ax.bar(
-        robots,
-        bottom,
-        yerr=np.sqrt(np.sum(std**2,axis=1)),
-        capsize=5,
-        
-    )
-    ax.set_ylabel(
+    ax.set_xlabel(
         "Time [s]"
     )
 
-    ax.set_title(
-        f"{name} waypoint time"
+    ax.set_ylabel(
+        "Photosynthesis"
     )
 
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Photosynthesis"
+    )
 
     ax.legend()
-
+    ax.grid(alpha=0.25)
 
     save(
         fig,
         output_folder,
-        "waypoint_mean"
+        "photosynthesis_equal_reward.png"
     )
 
 
-    plt.close(fig)
+# ============================================================
+# SCALAR METRIC COMPARISON
+# ============================================================
 
+def compare_equal_reward_scalar_metric(
+    configuration_results,
+    config_name,
+    metric,
+    output_folder
+):
 
+    rows = []
 
-# ==========================================================
-# HEADING
-# ==========================================================
+    for group in [
+        "equal",
+        "reward"
+    ]:
 
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
 
-def aggregate_heading(
-        experiments,
-        output_folder,
-        name):
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
 
+        values = []
 
-    values=[]
+        for experiment_path in experiments:
 
-
-    for exp in experiments:
-
-
-        file=os.path.join(
-            exp,
-            "plots",
-            "summary.csv"
-        )
-
-
-        if os.path.exists(file):
-
-            df=pd.read_csv(file)
-
-            values.append(
-                df["Heading_%"].values
+            path = os.path.join(
+                experiment_path,
+                f"{metric}.csv"
             )
 
+            if not os.path.exists(path):
+                continue
 
+            try:
 
-    values=np.array(values)
+                df = pd.read_csv(path)
 
+            except Exception:
 
-    mean=np.mean(
-        values,
-        axis=0
+                continue
+
+            numeric = df.select_dtypes(
+                include=[np.number]
+            )
+
+            if numeric.shape[1] == 0:
+                continue
+
+            values.extend(
+                numeric.iloc[:, 0]
+                .dropna()
+                .values
+                .tolist()
+            )
+
+        for value in values:
+
+            rows.append({
+                "group": group,
+                "value": value
+            })
+
+    if len(rows) == 0:
+        return
+
+    result = pd.DataFrame(
+        rows
     )
 
-
-    std=np.std(
-        values,
-        axis=0
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
     )
 
+    groups = [
+        "equal",
+        "reward"
+    ]
 
-    pd.DataFrame({
+    data = []
 
-        "Robot":[
-            "Robot1",
-            "Robot2",
-            "Robot3"
-        ],
+    labels = []
 
-        "mean":mean,
+    for group in groups:
 
-        "std":std
+        values = result[
+            result["group"] == group
+        ]["value"].values
 
-    }).to_csv(
+        if len(values) == 0:
+            continue
 
-        os.path.join(
-            output_folder,
-            "heading_statistics.csv"
-        ),
+        data.append(values)
+        labels.append(
+            group.capitalize()
+        )
 
-        index=False
+    if len(data) == 0:
+
+        plt.close(fig)
+        return
+
+    ax.boxplot(
+        data,
+        labels=labels
     )
-
-
-
-    fig,ax=plt.subplots(
-        figsize=get_figsize((5,4))
-    )
-
-
-    ax.bar(
-        [
-            "Robot1",
-            "Robot2",
-            "Robot3"
-        ],
-        mean,
-        yerr=std,
-        capsize=5
-    )
-
 
     ax.set_ylabel(
-        "% mission"
+        metric.capitalize()
     )
-
 
     ax.set_title(
-        f"{name} heading"
+        f"{config_name.capitalize()} - "
+        f"{metric.capitalize()}"
     )
 
+    ax.grid(
+        alpha=0.25
+    )
+
+    # IMPORTANT:
+    # This used to have the same filename as the
+    # photosynthesis time-series plot.
+    save(
+        fig,
+        output_folder,
+        f"{metric}_scalar_equal_reward.png"
+    )
+
+
+# ============================================================
+# MISSION TIME COMPARISON
+# ============================================================
+
+def compare_equal_reward_mission_time(
+    configuration_results,
+    config_name,
+    output_folder
+):
+
+    rows = []
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
+
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
+
+        for experiment_index, experiment_path in enumerate(
+            experiments,
+            start=1
+        ):
+
+            for robot in ROBOTS:
+
+                path = os.path.join(
+                    experiment_path,
+                    f"{robot}_mission_times.csv"
+                )
+
+                if not os.path.exists(path):
+                    continue
+
+                try:
+
+                    df = pd.read_csv(
+                        path
+                    )
+
+                except Exception:
+
+                    continue
+
+                if (
+                    "charging_completion_time"
+                    not in df.columns
+                ):
+                    continue
+
+                values = pd.to_numeric(
+                    df[
+                        "charging_completion_time"
+                    ],
+                    errors="coerce"
+                ).dropna()
+
+                if len(values) == 0:
+                    continue
+
+                rows.append({
+                    "group": group,
+                    "robot": robot,
+                    "experiment": experiment_index,
+                    "time": values.iloc[-1]
+                })
+
+    if len(rows) == 0:
+        return
+
+    result = pd.DataFrame(
+        rows
+    )
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    positions = []
+    data = []
+    labels = []
+
+    position = 1
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        for robot in ROBOTS:
+
+            values = result[
+                (
+                    result["group"] == group
+                )
+                & (
+                    result["robot"] == robot
+                )
+            ]["time"].values
+
+            if len(values) == 0:
+                continue
+
+            data.append(values)
+            positions.append(position)
+
+            labels.append(
+                f"{group.capitalize()}\n"
+                f"{ROBOT_LABELS[robot]}"
+            )
+
+            position += 1
+
+    if len(data) == 0:
+
+        plt.close(fig)
+        return
+
+    ax.boxplot(
+        data,
+        positions=positions
+    )
+
+    ax.set_xticks(
+        positions
+    )
+
+    ax.set_xticklabels(
+        labels
+    )
+
+    ax.set_ylabel(
+        "Mission time [s]"
+    )
+
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Mission time"
+    )
+
+    ax.grid(
+        alpha=0.25
+    )
 
     save(
         fig,
         output_folder,
-        "heading_mean"
+        "mission_time_equal_reward.png"
     )
 
-    plt.close(fig)
 
+# ============================================================
+# WAYPOINT TIME COMPARISON
+# ============================================================
 
+def compare_equal_reward_waypoint_time(
+    configuration_results,
+    config_name,
+    output_folder
+):
 
-# ==========================================================
-# SWARM COMPACTNESS
-# ==========================================================
-def aggregate_compactness(data, time, output_folder, name):
+    rows = []
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
+
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
+
+        waypoints = CONFIG_WAYPOINTS[
+            config_name
+        ]
+
+        for experiment_index, experiment_path in enumerate(
+            experiments,
+            start=1
+        ):
+
+            for robot in ROBOTS:
+
+                path = os.path.join(
+                    experiment_path,
+                    f"{robot}_position.csv"
+                )
+
+                if not os.path.exists(path):
+                    continue
+
+                try:
+
+                    df = pd.read_csv(
+                        path
+                    )
+
+                except Exception:
+
+                    continue
+
+                if "time" not in df.columns:
+                    continue
+
+                if (
+                    "x" not in df.columns
+                    or "y" not in df.columns
+                ):
+                    continue
+
+                time = pd.to_numeric(
+                    df["time"],
+                    errors="coerce"
+                ).values
+
+                x = pd.to_numeric(
+                    df["x"],
+                    errors="coerce"
+                ).values
+
+                y = pd.to_numeric(
+                    df["y"],
+                    errors="coerce"
+                ).values
+
+                valid = (
+                    np.isfinite(time)
+                    & np.isfinite(x)
+                    & np.isfinite(y)
+                )
+
+                time = time[valid]
+                x = x[valid]
+                y = y[valid]
+
+                if len(time) == 0:
+                    continue
+
+                for waypoint_index, waypoint in enumerate(
+                    waypoints
+                ):
+
+                    distance = np.sqrt(
+                        (
+                            x - waypoint[0]
+                        ) ** 2
+                        + (
+                            y - waypoint[1]
+                        ) ** 2
+                    )
+
+                    inside = (
+                        distance
+                        <= WAYPOINT_VISIT_THRESHOLD
+                    )
+
+                    indices = np.where(
+                        inside
+                    )[0]
+
+                    if len(indices) == 0:
+                        continue
+
+                    first_time = time[
+                        indices[0]
+                    ]
+
+                    rows.append({
+                        "group": group,
+                        "robot": robot,
+                        "waypoint": waypoint_index + 1,
+                        "time": (
+                            first_time
+                            - time[0]
+                        )
+                    })
+
+    if len(rows) == 0:
+        return
+
+    result = pd.DataFrame(
+        rows
+    )
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        values = []
+
+        for waypoint_index in range(
+            1,
+            N_WAYPOINTS + 1
+        ):
+
+            subset = result[
+                (
+                    result["group"] == group
+                )
+                & (
+                    result["waypoint"]
+                    == waypoint_index
+                )
+            ]
+
+            if len(subset) == 0:
+                values.append(
+                    np.nan
+                )
+            else:
+                values.append(
+                    subset["time"].mean()
+                )
+
+        ax.plot(
+            range(
+                1,
+                N_WAYPOINTS + 1
+            ),
+            values,
+            marker="o",
+            label=group.capitalize()
+        )
+
+    ax.set_xlabel(
+        "Waypoint"
+    )
+
+    ax.set_ylabel(
+        "Time to waypoint [s]"
+    )
+
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Waypoint time"
+    )
+
+    ax.set_xticks(
+        range(
+            1,
+            N_WAYPOINTS + 1
+        )
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend()
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_time_equal_reward.png"
+    )
+def compare_equal_reward_mission_time_all_configurations(
+        configuration_results,
+        output_folder
+):
 
     robots = [
         "rosbot_1_0",
@@ -1597,2030 +2414,3177 @@ def aggregate_compactness(data, time, output_folder, name):
     robot_labels = [
         "Robot 1",
         "Robot 2",
-        "Robot 3"
+        "Robot 3",
+        "Swarm"
     ]
 
-    distances = {
+    equal_config_values = {
         robot: []
         for robot in robots
     }
 
-    # ==================================================
-    # COMPUTE DISTANCE FROM INSTANTANEOUS SWARM CENTER
-    # ==================================================
+    reward_config_values = {
+        robot: []
+        for robot in robots
+    }
 
-    for experiment in data:
+    equal_swarm_values = []
+    reward_swarm_values = []
 
-        positions = []
+    # ============================================================
+    # LETTURA MISSION TIME
+    # ============================================================
+
+    def read_experiment_mission_times(experiment):
+
+        mission_times = {}
 
         for robot in robots:
 
-            p = experiment["robots"][robot]["position"]
-
-            xy = np.column_stack((
-                p["x"],
-                p["y"]
-            ))
-
-            positions.append(xy)
-
-        # Make sure all robots have the same length
-        min_len = min(
-            len(position)
-            for position in positions
-        )
-
-        positions = np.array([
-            position[:min_len]
-            for position in positions
-        ])
-
-        # Shape:
-        # (3 robots, N samples, 2 coordinates)
-
-        center = np.mean(
-            positions,
-            axis=0
-        )
-
-        # Distance of every robot from
-        # instantaneous swarm center
-        dist = np.linalg.norm(
-            positions - center,
-            axis=2
-        )
-
-        for i, robot in enumerate(robots):
-            distances[robot].append(
-                dist[i]
+            filename = (
+                f"{robot}_mission_times.csv"
             )
 
-    # ==================================================
-    # MEAN ACROSS EXPERIMENTS
-    # ==================================================
+            filepath = os.path.join(
+                experiment,
+                filename
+            )
 
-    mean_distances = {}
+            if not os.path.exists(filepath):
+                continue
 
-    for robot in robots:
+            df = pd.read_csv(filepath)
 
-        if len(distances[robot]) == 0:
+            if (
+                "charging_completion_time"
+                not in df.columns
+            ):
+                continue
+
+            values = (
+                pd.to_numeric(
+                    df["charging_completion_time"],
+                    errors="coerce"
+                )
+                .dropna()
+                .values
+            )
+
+            if len(values) == 0:
+                continue
+
+            # Ultimo charging completion time
+            mission_times[robot] = float(
+                values[-1]
+            )
+
+        return mission_times
+
+    # ============================================================
+    # CONFIGURAZIONE PER CONFIGURAZIONE
+    # ============================================================
+
+    for config_name in CONFIG_NAMES:
+
+        if config_name not in configuration_results:
             continue
 
-        min_len = min(
-            len(d)
-            for d in distances[robot]
-        )
+        for group in ["equal", "reward"]:
 
-        values = np.array([
-            d[:min_len]
-            for d in distances[robot]
-        ])
+            if group not in configuration_results[config_name]:
+                continue
 
-        mean_distances[robot] = np.mean(
-            values,
-            axis=0
-        )
+            experiments = (
+                configuration_results[
+                    config_name
+                ][group]["experiments"]
+            )
 
-    # ==================================================
-    # CREATE TIME VECTOR FROM DATA
-    # ==================================================
+            group_values = {
+                robot: []
+                for robot in robots
+            }
 
-    if len(mean_distances) == 0:
-        print(
-            f"WARNING: no compactness data available for {name}"
-        )
-        return
+            swarm_values = []
 
-    n_samples = max(
-        len(values)
-        for values in mean_distances.values()
-    )
+            # ----------------------------------------------------
+            # Esperimenti della configurazione
+            # ----------------------------------------------------
 
-    # Use DT = 0.05 s
-    compactness_time = np.arange(n_samples) * DT
+            for experiment in experiments:
 
-    # ==================================================
-    # PLOT
-    # ==================================================
+                # experiment è un PATH/stringa
+                mission_times = (
+                    read_experiment_mission_times(
+                        experiment
+                    )
+                )
 
-    fig, ax = plt.subplots(
-        figsize=get_figsize((10, 5))
-    )
+                robot_times = []
 
-    for robot, label in zip(
-        robots,
-        robot_labels
-    ):
+                for robot in robots:
 
-        if robot not in mean_distances:
-            continue
+                    if robot not in mission_times:
+                        continue
 
-        values = mean_distances[robot]
+                    value = mission_times[robot]
 
-        local_time = np.arange(
-            len(values)
-        ) * DT
+                    if np.isfinite(value):
 
-        ax.plot(
-            local_time,
-            values,
-            label=label
-        )
+                        group_values[robot].append(
+                            value
+                        )
 
-    ax.set_xlabel("Time [s]")
+                        robot_times.append(
+                            value
+                        )
 
-    ax.set_ylabel(
-        "Distance from swarm center [m]"
-    )
+                # ------------------------------------------------
+                # Swarm = ultimo robot che termina
+                # ------------------------------------------------
 
-    ax.set_title(
-        f"{name} - distance from swarm center"
-    )
+                if len(robot_times) == len(robots):
 
-    ax.legend()
+                    swarm_values.append(
+                        max(robot_times)
+                    )
 
-    ax.grid(
-        axis="both",
-        alpha=0.3
-    )
+            # ----------------------------------------------------
+            # Media degli esperimenti della configurazione
+            # ----------------------------------------------------
 
-    save(
-        fig,
-        output_folder,
-        "swarm_compactness"
-    )
+            target_values = (
+                equal_config_values
+                if group == "equal"
+                else reward_config_values
+            )
 
-    plt.close(fig)
-
-def compare_swarm_compactness(
-        equal_data,
-        reward_data,
-        output_folder):
-
-    robots = [
-        "rosbot_1_0",
-        "rosbot_2_1",
-        "rosbot_3_2"
-    ]
-
-    robot_labels = [
-        "Robot 1",
-        "Robot 2",
-        "Robot 3"
-    ]
-
-    def compute_mean_distances(data):
-
-        distances = {
-            robot: []
-            for robot in robots
-        }
-
-        for experiment in data:
-
-            positions = []
+            target_swarm_values = (
+                equal_swarm_values
+                if group == "equal"
+                else reward_swarm_values
+            )
 
             for robot in robots:
 
-                p = experiment["robots"][robot]["position"]
+                if len(group_values[robot]) > 0:
 
-                xy = np.column_stack((
-                    p["x"],
-                    p["y"]
-                ))
+                    target_values[robot].append(
+                        np.mean(
+                            group_values[robot]
+                        )
+                    )
 
-                positions.append(xy)
+            if len(swarm_values) > 0:
 
-            # Same number of samples for all robots
-            min_len = min(
-                len(position)
-                for position in positions
-            )
-
-            positions = np.array([
-                position[:min_len]
-                for position in positions
-            ])
-
-            # Instantaneous swarm center
-            center = np.mean(
-                positions,
-                axis=0
-            )
-
-            # Distance of each robot from swarm center
-            dist = np.linalg.norm(
-                positions - center,
-                axis=2
-            )
-
-            for i, robot in enumerate(robots):
-                distances[robot].append(
-                    dist[i]
+                target_swarm_values.append(
+                    np.mean(swarm_values)
                 )
 
-        # Mean across experiments
-        mean_distances = {}
+    # ============================================================
+    # MEDIA TRA CONFIGURAZIONI
+    # ============================================================
 
-        for robot in robots:
+    equal_means = []
+    equal_stds = []
 
-            if len(distances[robot]) == 0:
-                continue
+    reward_means = []
+    reward_stds = []
 
-            min_len = min(
-                len(d)
-                for d in distances[robot]
-            )
+    for robot in robots:
 
-            values = np.array([
-                d[:min_len]
-                for d in distances[robot]
-            ])
-
-            mean_distances[robot] = np.mean(
-                values,
-                axis=0
-            )
-
-        return mean_distances
-
-    # ==================================================
-    # COMPUTE EQUAL AND REWARD
-    # ==================================================
-
-    equal_distances = compute_mean_distances(
-        equal_data
-    )
-
-    reward_distances = compute_mean_distances(
-        reward_data
-    )
-
-    # ==================================================
-    # PLOT
-    # ==================================================
-
-    fig, ax = plt.subplots(
-        figsize=get_figsize((12, 6))
-    )
-
-    for robot, label in zip(
-        robots,
-        robot_labels
-    ):
-
+        # --------------------------------------------------------
         # Equal
-        if robot in equal_distances:
+        # --------------------------------------------------------
 
-            values = equal_distances[robot]
+        equal_values = [
+            value
+            for value in equal_config_values[robot]
+            if np.isfinite(value)
+        ]
 
-            time = np.arange(
-                len(values)
-            ) * DT
+        if len(equal_values) > 0:
 
-            ax.plot(
-                time,
-                values,
-                label=f"Equal - {label}"
+            equal_means.append(
+                np.mean(equal_values)
             )
 
+            equal_stds.append(
+                np.std(equal_values)
+            )
+
+        else:
+
+            equal_means.append(
+                np.nan
+            )
+
+            equal_stds.append(
+                0
+            )
+
+        # --------------------------------------------------------
         # Reward
-        if robot in reward_distances:
+        # --------------------------------------------------------
 
-            values = reward_distances[robot]
+        reward_values = [
+            value
+            for value in reward_config_values[robot]
+            if np.isfinite(value)
+        ]
 
-            time = np.arange(
-                len(values)
-            ) * DT
+        if len(reward_values) > 0:
 
-            ax.plot(
-                time,
-                values,
-                linestyle="--",
-                label=f"Reward - {label}"
+            reward_means.append(
+                np.mean(reward_values)
             )
 
-    ax.set_xlabel("Time [s]")
+            reward_stds.append(
+                np.std(reward_values)
+            )
 
-    ax.set_ylabel(
-        "Distance from swarm center [m]"
-    )
-
-    ax.set_title(
-        "Swarm compactness comparison"
-    )
-
-    ax.legend()
-
-    ax.grid(
-        axis="both",
-        alpha=0.3
-    )
-
-    save(
-        fig,
-        output_folder,
-        "swarm_compactness_comparison"
-    )
-
-    plt.close(fig)
-
-def aggregate_mission_time(experiments, output_folder, name):
-
-    agents = ["Robot1", "Robot2", "Robot3", "Swarm"]
-
-    values = {
-        agent: []
-        for agent in agents
-    }
-
-    # ==================================================
-    # READ DIRECTLY FROM mission_time_statistics.csv
-    # ==================================================
-
-    for exp in experiments:
-
-        file_path = os.path.join(
-            exp,
-            "mission_time_statistics.csv"
-        )
-
-        if not os.path.exists(file_path):
-            print(f"WARNING: file not found: {file_path}")
-            continue
-
-        df = pd.read_csv(file_path)
-
-        for agent in agents:
-
-            row = df[df["Agent"] == agent]
-
-            if not row.empty:
-
-                value = row["Mission time [s]"].iloc[0]
-
-                if pd.notna(value):
-                    values[agent].append(float(value))
-
-    # ==================================================
-    # COMPUTE MEAN
-    # ==================================================
-
-    result = []
-
-    for agent in agents:
-
-        if len(values[agent]) > 0:
-            mean_value = np.mean(values[agent])
         else:
-            mean_value = np.nan
 
-        result.append({
-            "Agent": agent,
-            "Mission time [s]": mean_value
-        })
+            reward_means.append(
+                np.nan
+            )
 
-    result = pd.DataFrame(result)
+            reward_stds.append(
+                0
+            )
 
-    # ==================================================
-    # SAVE AGGREGATED FILE
-    # ==================================================
+    # ============================================================
+    # SWARM
+    # ============================================================
 
-    output_file = os.path.join(
-        output_folder,
-        "mission_time_statistics.csv"
-    )
-
-    result.to_csv(
-        output_file,
-        index=False
-    )
-
-    print(f"Saved: {output_file}")
-
-    # ==================================================
-    # PLOT
-    # ==================================================
-
-    std = []
-
-    for agent in agents:
-
-        if len(values[agent]) > 0:
-            std.append(np.std(values[agent]))
-        else:
-            std.append(np.nan)
-
-    fig, ax = plt.subplots(figsize=get_figsize((8, 5)))
-
-    ax.bar(
-        agents,
-        result["Mission time [s]"],
-        yerr=std,
-        capsize=5
-    )
-
-    ax.set_xlabel("Agent")
-    ax.set_ylabel("Mission time [s]")
-    ax.set_title(f"{name} - Mission time")
-
-    ax.grid(
-        axis="y",
-        alpha=0.3
-    )
-
-    save(
-        fig,
-        output_folder,
-        "mission_time_mean"
-    )
-
-    plt.close(fig)
-
-def compare_mission_time(
-        equal_experiments,
-        reward_experiments,
-        output_folder):
-
-    agents = [
-        "Robot1",
-        "Robot2",
-        "Robot3",
-        "Swarm"
+    equal_swarm_values = [
+        value
+        for value in equal_swarm_values
+        if np.isfinite(value)
     ]
 
-    # ==================================================
-    # LOAD DIRECTLY FROM mission_time_statistics.csv
-    # ==================================================
+    reward_swarm_values = [
+        value
+        for value in reward_swarm_values
+        if np.isfinite(value)
+    ]
 
-    def load_values(experiments):
+    if len(equal_swarm_values) > 0:
 
-        data = {
-            agent: []
-            for agent in agents
-        }
+        equal_means.append(
+            np.mean(equal_swarm_values)
+        )
 
-        for exp in experiments:
+        equal_stds.append(
+            np.std(equal_swarm_values)
+        )
 
-            file_path = os.path.join(
-                exp,
-                "mission_time_statistics.csv"
-            )
+    else:
 
-            if not os.path.exists(file_path):
-                print(f"WARNING: file not found: {file_path}")
-                continue
+        equal_means.append(
+            np.nan
+        )
 
-            df = pd.read_csv(file_path)
+        equal_stds.append(
+            0
+        )
 
-            for agent in agents:
+    if len(reward_swarm_values) > 0:
 
-                row = df[df["Agent"] == agent]
+        reward_means.append(
+            np.mean(reward_swarm_values)
+        )
 
-                if not row.empty:
+        reward_stds.append(
+            np.std(reward_swarm_values)
+        )
 
-                    value = row["Mission time [s]"].iloc[0]
+    else:
 
-                    if pd.notna(value):
-                        data[agent].append(float(value))
+        reward_means.append(
+            np.nan
+        )
 
-        return data
+        reward_stds.append(
+            0
+        )
 
-    equal_values = load_values(equal_experiments)
-    reward_values = load_values(reward_experiments)
+    # ============================================================
+    # CSV
+    # ============================================================
 
-    # ==================================================
-    # MEAN AND STD
-    # ==================================================
+    rows = []
 
-    equal_mean = np.array([
-        np.mean(equal_values[agent])
-        for agent in agents
-    ])
+    for i, label in enumerate(robot_labels):
 
-    equal_std = np.array([
-        np.std(equal_values[agent])
-        for agent in agents
-    ])
+        rows.append({
+            "Metric": label,
+            "Equal_mean": equal_means[i],
+            "Equal_std": equal_stds[i],
+            "Reward_mean": reward_means[i],
+            "Reward_std": reward_stds[i]
+        })
 
-    reward_mean = np.array([
-        np.mean(reward_values[agent])
-        for agent in agents
-    ])
-
-    reward_std = np.array([
-        np.std(reward_values[agent])
-        for agent in agents
-    ])
-
-    # ==================================================
-    # SAVE COMPARISON DATA
-    # ==================================================
-
-    result = pd.DataFrame({
-        "Agent": agents,
-        "Equal_mean": equal_mean,
-        "Equal_std": equal_std,
-        "Reward_mean": reward_mean,
-        "Reward_std": reward_std
-    })
-
-    result.to_csv(
+    pd.DataFrame(rows).to_csv(
         os.path.join(
             output_folder,
-            "comparison_mission_time.csv"
+            "mission_time_equal_reward_all_configurations.csv"
         ),
         index=False
     )
 
-    # ==================================================
+    # ============================================================
     # PLOT
-    # ==================================================
+    # ============================================================
 
-    fig, ax = plt.subplots(figsize=get_figsize((8, 5)))
+    x = np.arange(
+        len(robot_labels)
+    )
 
-    x = np.arange(len(agents))
     width = 0.35
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
     ax.bar(
         x - width / 2,
-        equal_mean,
+        equal_means,
         width,
-        yerr=equal_std,
-        capsize=5,
+        yerr=equal_stds,
+        capsize=3,
         label="Equal"
     )
 
     ax.bar(
         x + width / 2,
-        reward_mean,
+        reward_means,
         width,
-        yerr=reward_std,
-        capsize=5,
+        yerr=reward_stds,
+        capsize=3,
         label="Reward"
     )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(agents)
+    ax.set_xticklabels(
+        robot_labels
+    )
 
-    ax.set_ylabel("Mission time [s]")
-    ax.set_title("Mission time comparison")
+    ax.set_ylabel(
+        "Mission completion time [s]"
+    )
+
+    ax.set_title(
+        "Mission completion time - Equal vs Reward\n"
+        "Mean across configurations"
+    )
 
     ax.legend()
+
     ax.grid(
         axis="y",
-        alpha=0.3
+        alpha=0.25
     )
 
     save(
         fig,
         output_folder,
-        "comparison_mission_time"
+        "mission_time_equal_reward_all_configurations"
     )
 
     plt.close(fig)
-# ==========================================================
-# EXECUTION PART 3
-# ==========================================================
 
+    # ============================================================
+    # Print numerical results
+    # ============================================================
 
-for data,out,name in [
-
-    (equal_data,equal_output,"equal"),
-
-    (reward_data,reward_output,"reward")
-
-]:
-
-
+    print()
+    print("=" * 75)
     print(
-        f"\nProcessing final statistics {name}"
+        "GLOBAL MISSION COMPLETION TIME - "
+        "EQUAL VS REWARD"
     )
-
-
-    aggregate_occupancy(
-        groups[name],
-        out,
-        name
+    print(
+        "Average across config1, config2 and config3"
     )
+    print("=" * 75)
 
+    for i, label in enumerate(robot_labels):
 
-    aggregate_waypoints(
-        groups[name],
-        out,
-        name
-    )
-
-
-    aggregate_heading(
-        groups[name],
-        out,
-        name
-    )
-    aggregate_mission_time(
-        groups[name],
-        out,
-        name
-    )
-    if name == "equal":
-        time = equal_time
-    elif name == "reward":
-        time = reward_time
-    else:
-        print("Unknown group name:", name)
-    aggregate_compactness(
-        data,
-        time,
-        out,
-        name
-    )
-
-
-
-
-print(
-    "\n================================"
-)
-
-print(
-    "ALL AGGREGATION COMPLETED"
-)
-
-print(
-    "================================"
-)
-
-# ============================================================
-# PART 4
-# TEMPORAL DATA AGGREGATION
-# Priority / Memory / Battery
-# ============================================================
-
-
-TIME_SAMPLES = 500
-
-
-def interpolate_curve(time, values, max_time, samples=TIME_SAMPLES):
-
-    """
-    Porta una curva temporale su una griglia comune
-    """
-
-    if len(time) < 2:
-        return None, None
-    t_rel = time - time[0]
-
-    t_norm = np.linspace(
-        0,
-        max_time,
-        samples
-    )
-
-    values_interp = np.interp(
-        t_norm,
-        t_rel,
-        values
-    )
-
-    return t_norm, values_interp
-
-
-
-def aggregate_time_series(
-        experiment_paths,
-        filename,
-        columns,
-        output_name):
-
-    """
-    Aggrega file csv temporali uguali
-    esempio:
-        robot_priority.csv
-        battery.csv
-        memory_log.csv
-    """
-
-
-    data = {
-        col: []
-        for col in columns
-    }
-
-    time_vectors = []
-
-
-    for exp in experiment_paths:
-
-
-        file_path = os.path.join(
-            exp,
-            filename
+        print(
+            f"{label:8s} | "
+            f"Equal: "
+            f"{equal_means[i]:.3f} ± "
+            f"{equal_stds[i]:.3f} s | "
+            f"Reward: "
+            f"{reward_means[i]:.3f} ± "
+            f"{reward_stds[i]:.3f} s"
         )
 
+    print("=" * 75)
+# ============================================================
+# WAYPOINT PERCENTAGE
+# ============================================================
 
-        if not os.path.exists(file_path):
+def compare_equal_reward_waypoint_percentage(
+    configuration_results,
+    config_name,
+    output_folder
+):
+
+    rows = []
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        if group not in configuration_results[
+            config_name
+        ]:
             continue
 
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
 
-        df = pd.read_csv(file_path)
+        waypoints = CONFIG_WAYPOINTS[
+            config_name
+        ]
 
+        for experiment_path in experiments:
 
+            for robot in ROBOTS:
 
-        if "time" not in df.columns:
-            continue
+                path = os.path.join(
+                    experiment_path,
+                    f"{robot}_position.csv"
+                )
 
+                if not os.path.exists(path):
+                    continue
 
+                try:
 
-        df = df.sort_values("time")
+                    df = pd.read_csv(
+                        path
+                    )
 
+                except Exception:
 
+                    continue
 
-        time = df["time"].values.astype(float)
+                visited = 0
 
-        time = time - time[0]
+                for waypoint in waypoints:
 
+                    if (
+                        count_waypoint_visits(
+                            df,
+                            waypoint
+                        ) > 0
+                    ):
+                        visited += 1
 
+                percentage = (
+                    100.0
+                    * visited
+                    / len(waypoints)
+                )
 
-        for col in columns:
+                rows.append({
+                    "group": group,
+                    "robot": robot,
+                    "percentage": percentage
+                })
 
-            if col not in df.columns:
-                continue
-
-
-            values = df[col].values.astype(float)
-
-
-
-            t_new, values_new = interpolate_curve(
-                time,
-                values, 
-                get_max_time(exp)
-            )
-
-
-            if values_new is not None:
-
-                data[col].append(values_new)
-
-            if values_new is not None:
-                time_vectors.append(t_new)
-
-
-
-    if len(time_vectors)==0:
+    if len(rows) == 0:
         return
 
+    result = pd.DataFrame(
+        rows
+    )
 
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
-    common_time = time_vectors[0]
+    for robot in ROBOTS:
 
+        values = []
 
+        for group in [
+            "equal",
+            "reward"
+        ]:
 
-    for col in columns:
+            subset = result[
+                (
+                    result["robot"] == robot
+                )
+                & (
+                    result["group"] == group
+                )
+            ]
 
+            if len(subset) == 0:
+                values.append(
+                    np.nan
+                )
+            else:
+                values.append(
+                    subset["percentage"].mean()
+                )
 
-        if len(data[col]) == 0:
-            continue
-
-
-
-        array = np.vstack(
-            data[col]
+        ax.plot(
+            [0, 1],
+            values,
+            marker="o",
+            label=ROBOT_LABELS[robot]
         )
 
+    ax.set_xticks(
+        [0, 1]
+    )
 
-        mean = np.mean(
-            array,
-            axis=0
-        )
-
-
-        std = np.std(
-            array,
-            axis=0
-        )
-
-
-        plt.figure(
-            figsize=get_figsize((8,4))
-        )
-
-
-        plt.plot(
-            common_time,
-            mean,
-            label="mean"
-        )
-
-
-        plt.fill_between(
-            common_time,
-            mean-std,
-            mean+std,
-            alpha=0.3,
-            label="± std"
-        )
-
-
-        plt.xlabel(
-            "Normalized time [s]"
-        )
-
-        plt.ylabel(
-            col
-        )
-
-
-        plt.title(
-            f"{output_name} - {col}"
-        )
-
-
-        plt.grid(True)
-
-        plt.legend()
-
-
-        plt.tight_layout()
-
-
-
-        plt.savefig(
-            os.path.join(
-                AGGREGATE_DIR,
-                f"{output_name}_{col}.png"
-            ),
-            dpi=300,
-        bbox_inches="tight"
-        )
-
-
-        plt.close()
-
-
-
-
-# ============================================================
-# PRIORITY
-# ============================================================
-
-
-for tag, experiments in [
-    ("equal", BASE_PATHS_EQUAL),
-    ("reward", BASE_PATHS_REWARD)
-]:
-
-
-    robots = [
-        "rosbot_1_0",
-        "rosbot_2_1",
-        "rosbot_3_2"
-    ]
-
-
-    for robot in robots:
-
-
-        aggregate_time_series(
-
-            experiments,
-
-            f"{robot}_priority.csv",
-
-            [
-                "priority0",
-                "priority1",
-                "priority2"
-            ],
-
-            f"{tag}_{robot}_priority"
-
-        )
-
-
-
-
-# ============================================================
-# MEMORY
-# ============================================================
-
-
-for tag, experiments in [
-    ("equal", BASE_PATHS_EQUAL),
-    ("reward", BASE_PATHS_REWARD)
-]:
-
-
-    aggregate_time_series(
-
-        experiments,
-
-        "memory_log.csv",
-
+    ax.set_xticklabels(
         [
-            "memory0",
-            "memory1",
-            "memory2"
-        ],
+            "Equal",
+            "Reward"
+        ]
+    )
 
-        f"{tag}_memory"
+    ax.set_ylabel(
+        "Waypoints visited [%]"
+    )
 
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Waypoint coverage"
+    )
+
+    ax.set_ylim(
+        0,
+        100
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend()
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_percentage_equal_reward.png"
     )
 
 
-
-
 # ============================================================
-# BATTERY
+# EQUAL VS REWARD COMPACTNESS
 # ============================================================
 
+def compare_equal_reward_compactness(
+    configuration_results,
+    config_name,
+    output_folder
+):
 
-for tag, experiments in [
-    ("equal", BASE_PATHS_EQUAL),
-    ("reward", BASE_PATHS_REWARD)
-]:
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
+    found = False
 
-    robots = [
-        "rosbot_1_0",
-        "rosbot_2_1",
-        "rosbot_3_2"
-    ]
+    for group in [
+        "equal",
+        "reward"
+    ]:
 
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
 
-    for robot in robots:
+        group_result = configuration_results[
+            config_name
+        ][group]
 
+        group_data = group_result["data"]
 
-        aggregate_time_series(
-
-            experiments,
-
-            f"{robot}_battery.csv",
-
-            [
-                "percentage",
-                "voltage"
-            ],
-
-            f"{tag}_{robot}_battery"
-
+        time, result = compute_compactness_curves(
+            group_data
         )
 
+        if result is None:
+            continue
+
+        mean, std = result
+
+        ax.plot(
+            time,
+            mean,
+            label=group.capitalize()
+        )
+
+        ax.fill_between(
+            time,
+            mean - std,
+            mean + std,
+            alpha=0.08
+        )
+
+        found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Time [s]"
+    )
+
+    ax.set_ylabel(
+        "Mean distance [m]"
+    )
+
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Swarm compactness"
+    )
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "compactness_equal_reward.png"
+    )
 
 
-print(
-    "Temporal aggregation completed"
-)
+# ============================================================
+# EQUAL VS REWARD WAYPOINT VISITS
+# ============================================================
 
-# ==========================================================
-# COMPARISON: OCCUPANCY
-# ==========================================================
+def compare_waypoint_visits_equal_reward(
+    configuration_results,
+    config_name,
+    output_folder
+):
 
-def compare_occupancy(
-        equal_experiments,
-        reward_experiments,
-        output_folder):
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
 
-    equal_values = np.array([
-        read_occupancy(exp)
-        for exp in equal_experiments
-    ], dtype=float)
+    x = np.arange(
+        1,
+        N_WAYPOINTS + 1
+    )
 
-    reward_values = np.array([
-        read_occupancy(exp)
-        for exp in reward_experiments
-    ], dtype=float)
+    found = False
 
-    equal_mean = np.nanmean(equal_values)
-    equal_std = np.nanstd(equal_values)
+    for group in [
+        "equal",
+        "reward"
+    ]:
 
-    reward_mean = np.nanmean(reward_values)
-    reward_std = np.nanstd(reward_values)
+        if group not in configuration_results[
+            config_name
+        ]:
+            continue
 
-    fig, ax = plt.subplots(figsize=get_figsize((6, 4)))
+        experiments = configuration_results[
+            config_name
+        ][group]["experiments"]
 
-    x = np.arange(2)
+        waypoints = CONFIG_WAYPOINTS[
+            config_name
+        ]
 
-    means = [
-        equal_mean,
-        reward_mean
+        means = []
+
+        for waypoint in waypoints:
+
+            values = []
+
+            for experiment_path in experiments:
+
+                for robot in ROBOTS:
+
+                    path = os.path.join(
+                        experiment_path,
+                        f"{robot}_position.csv"
+                    )
+
+                    if not os.path.exists(path):
+                        continue
+
+                    try:
+
+                        df = pd.read_csv(
+                            path
+                        )
+
+                    except Exception:
+
+                        continue
+
+                    values.append(
+                        count_waypoint_visits(
+                            df,
+                            waypoint
+                        )
+                    )
+
+            if len(values) == 0:
+                means.append(0)
+            else:
+                means.append(
+                    np.mean(values)
+                )
+
+        ax.plot(
+            x,
+            means,
+            marker="o",
+            label=group.capitalize()
+        )
+
+        found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Waypoint"
+    )
+
+    ax.set_ylabel(
+        "Mean number of visits"
+    )
+
+    ax.set_title(
+        f"{config_name.capitalize()} - "
+        "Equal vs Reward"
+    )
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend()
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_visits_equal_reward.png"
+    )
+
+
+# ============================================================
+# ============================================================
+# GLOBAL EQUAL VS REWARD
+# AVERAGE ACROSS CONFIG1 / CONFIG2 / CONFIG3
+# ============================================================
+# ============================================================
+
+def get_group_data(
+    configuration_results,
+    config_name,
+    group
+):
+
+    if config_name not in configuration_results:
+        return None
+
+    if group not in configuration_results[
+        config_name
+    ]:
+        return None
+
+    return configuration_results[
+        config_name
+    ][group]["data"]
+
+
+# ============================================================
+# GLOBAL TIME AXIS
+# ============================================================
+
+def interpolate_curve(
+    source_time,
+    values,
+    target_time
+):
+
+    source_time = np.asarray(
+        source_time,
+        dtype=float
+    )
+
+    values = np.asarray(
+        values,
+        dtype=float
+    )
+
+    n = min(
+        len(source_time),
+        len(values)
+    )
+
+    if n == 0:
+        return None
+
+    source_time = source_time[:n]
+    values = values[:n]
+
+    valid = (
+        np.isfinite(source_time)
+        & np.isfinite(values)
+    )
+
+    source_time = source_time[valid]
+    values = values[valid]
+
+    if len(source_time) == 0:
+        return None
+
+    if len(source_time) == 1:
+
+        return np.full(
+            len(target_time),
+            values[0]
+        )
+
+    # Remove duplicated time samples.
+    unique_time, unique_indices = np.unique(
+        source_time,
+        return_index=True
+    )
+
+    unique_values = values[
+        unique_indices
     ]
 
-    stds = [
-        equal_std,
-        reward_std
-    ]
+    if len(unique_time) == 1:
+
+        return np.full(
+            len(target_time),
+            unique_values[0]
+        )
+
+    return np.interp(
+        target_time,
+        unique_time,
+        unique_values
+    )
+
+
+def get_common_global_time(
+    configuration_results,
+    group_curves
+):
+
+    max_times = []
+
+    for config_name in CONFIG_NAMES:
+
+        if config_name not in group_curves:
+            continue
+
+        if group_curves[
+            config_name
+        ] is None:
+            continue
+
+        time, curve = group_curves[
+            config_name
+        ]
+
+        if (
+            time is None
+            or curve is None
+            or len(time) == 0
+            or len(curve) == 0
+        ):
+            continue
+
+        max_times.append(
+            min(
+                time[-1],
+                time[len(curve) - 1]
+            )
+        )
+
+    if len(max_times) == 0:
+        return None
+
+    max_common_time = min(
+        max_times
+    )
+
+    if max_common_time <= 0:
+        return None
+
+    return np.arange(
+        0,
+        max_common_time + 1e-9,
+        0.1
+    )
+
+
+# ============================================================
+# GLOBAL CONFIGURATION CURVE
+# ============================================================
+
+def get_configuration_curve(
+    group_data,
+    metric,
+    robot=None
+):
+
+    if group_data is None:
+        return None, None
+
+    data = group_data["data"]
+    time = group_data["time"]
+
+    if len(data) == 0:
+        return None, None
+
+    curves = []
+
+    # --------------------------------------------------------
+    # Priority
+    # --------------------------------------------------------
+
+    if metric == "priority":
+
+        if robot is None:
+            return None, None
+
+        for experiment in data:
+
+            df = experiment[
+                robot
+            ]["priority"]
+
+            if (
+                df is None
+                or "priority" not in df.columns
+            ):
+                continue
+
+            curves.append(
+                df["priority"].values
+            )
+
+    # --------------------------------------------------------
+    # Battery
+    # --------------------------------------------------------
+
+    elif metric == "battery":
+
+        if robot is None:
+            return None, None
+
+        for experiment in data:
+
+            df = experiment[
+                robot
+            ]["battery"]
+
+            if df is None:
+                continue
+
+            numeric = df.select_dtypes(
+                include=[np.number]
+            )
+
+            if numeric.shape[1] == 0:
+                continue
+
+            curves.append(
+                numeric.iloc[:, 0].values
+            )
+
+    # --------------------------------------------------------
+    # Memory
+    # --------------------------------------------------------
+
+    elif metric == "memory":
+
+        for experiment in data:
+
+            robot_curves = []
+
+            for current_robot in ROBOTS:
+
+                df = experiment[
+                    current_robot
+                ]["memory"]
+
+                if df is None:
+                    continue
+
+                numeric = df.select_dtypes(
+                    include=[np.number]
+                )
+
+                if numeric.shape[1] == 0:
+                    continue
+
+                robot_curves.append(
+                    numeric.iloc[:, 0].values
+                )
+
+            if len(robot_curves) == 0:
+                continue
+
+            min_length = min(
+                len(curve)
+                for curve in robot_curves
+            )
+
+            experiment_curve = np.mean(
+                np.array([
+                    curve[:min_length]
+                    for curve in robot_curves
+                ]),
+                axis=0
+            )
+
+            curves.append(
+                experiment_curve
+            )
+
+    # --------------------------------------------------------
+    # Compactness
+    # --------------------------------------------------------
+
+    elif metric == "compactness":
+
+        compactness_time, result = (
+            compute_compactness_curves(
+                group_data
+            )
+        )
+
+        if result is None:
+            return None, None
+
+        mean, std = result
+
+        return (
+            compactness_time,
+            mean
+        )
+
+    # --------------------------------------------------------
+    # Photosynthesis
+    # --------------------------------------------------------
+
+    elif metric == "photosynthesis":
+
+        for experiment in data:
+
+            df = experiment[
+                "photosynthesis"
+            ]
+
+            if df is None:
+                continue
+
+            numeric_columns = [
+                column
+                for column in df.columns
+                if column != "time"
+            ]
+
+            if len(numeric_columns) == 0:
+                continue
+
+            values = pd.to_numeric(
+                df[numeric_columns[0]],
+                errors="coerce"
+            ).values
+
+            if len(values) == 0:
+                continue
+
+            curves.append(
+                values
+            )
+
+    else:
+
+        return None, None
+
+    if len(curves) == 0:
+        return None, None
+
+    mean, std = mean_std(
+        curves
+    )
+
+    return (
+        time[:len(mean)],
+        mean
+    )
+
+
+# ============================================================
+# GLOBAL EQUAL VS REWARD TIME SERIES
+# ============================================================
+
+def compare_equal_reward_all_configurations_time_series(
+    configuration_results,
+    metric,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    found = False
+
+    # --------------------------------------------------------
+    # Priority and Battery:
+    # keep the distinction between robots.
+    #
+    # For every robot:
+    #
+    #   experiment mean
+    #       -> configuration mean
+    #       -> mean across configurations
+    #
+    # This gives equal weight to config1/config2/config3.
+    # --------------------------------------------------------
+
+    if metric in [
+        "priority",
+        "battery"
+    ]:
+
+        for robot in ROBOTS:
+
+            for group in [
+                "equal",
+                "reward"
+            ]:
+
+                configuration_curves = {}
+
+                for config_name in CONFIG_NAMES:
+
+                    group_data = get_group_data(
+                        configuration_results,
+                        config_name,
+                        group
+                    )
+
+                    if group_data is None:
+                        continue
+
+                    time, curve = (
+                        get_configuration_curve(
+                            group_data,
+                            metric,
+                            robot
+                        )
+                    )
+
+                    if (
+                        time is None
+                        or curve is None
+                    ):
+                        continue
+
+                    configuration_curves[
+                        config_name
+                    ] = (
+                        time,
+                        curve
+                    )
+
+                if len(configuration_curves) == 0:
+                    continue
+
+                common_time = get_common_global_time(
+                    configuration_results,
+                    configuration_curves
+                )
+
+                if common_time is None:
+                    continue
+
+                aligned_curves = []
+
+                for config_name in CONFIG_NAMES:
+
+                    if config_name not in configuration_curves:
+                        continue
+
+                    time, curve = (
+                        configuration_curves[
+                            config_name
+                        ]
+                    )
+
+                    interpolated = interpolate_curve(
+                        time,
+                        curve,
+                        common_time
+                    )
+
+                    if interpolated is not None:
+                        aligned_curves.append(
+                            interpolated
+                        )
+
+                if len(aligned_curves) == 0:
+                    continue
+
+                aligned_curves = np.array(
+                    aligned_curves
+                )
+
+                global_mean = np.mean(
+                    aligned_curves,
+                    axis=0
+                )
+
+                global_std = np.std(
+                    aligned_curves,
+                    axis=0
+                )
+
+                ax.plot(
+                    common_time,
+                    global_mean,
+                    label=(
+                        f"{group.capitalize()} "
+                        f"{ROBOT_LABELS[robot]}"
+                    )
+                )
+
+                ax.fill_between(
+                    common_time,
+                    global_mean - global_std,
+                    global_mean + global_std,
+                    alpha=0.08
+                )
+
+                found = True
+
+    # --------------------------------------------------------
+    # Memory / Compactness / Photosynthesis:
+    # one curve for each group.
+    # --------------------------------------------------------
+
+    else:
+
+        for group in [
+            "equal",
+            "reward"
+        ]:
+
+            configuration_curves = {}
+
+            for config_name in CONFIG_NAMES:
+
+                group_data = get_group_data(
+                    configuration_results,
+                    config_name,
+                    group
+                )
+
+                if group_data is None:
+                    continue
+
+                time, curve = (
+                    get_configuration_curve(
+                        group_data,
+                        metric
+                    )
+                )
+
+                if (
+                    time is None
+                    or curve is None
+                ):
+                    continue
+
+                configuration_curves[
+                    config_name
+                ] = (
+                    time,
+                    curve
+                )
+
+            if len(configuration_curves) == 0:
+                continue
+
+            common_time = get_common_global_time(
+                configuration_results,
+                configuration_curves
+            )
+
+            if common_time is None:
+                continue
+
+            aligned_curves = []
+
+            for config_name in CONFIG_NAMES:
+
+                if config_name not in configuration_curves:
+                    continue
+
+                time, curve = (
+                    configuration_curves[
+                        config_name
+                    ]
+                )
+
+                interpolated = interpolate_curve(
+                    time,
+                    curve,
+                    common_time
+                )
+
+                if interpolated is not None:
+                    aligned_curves.append(
+                        interpolated
+                    )
+
+            if len(aligned_curves) == 0:
+                continue
+
+            aligned_curves = np.array(
+                aligned_curves
+            )
+
+            global_mean = np.mean(
+                aligned_curves,
+                axis=0
+            )
+
+            global_std = np.std(
+                aligned_curves,
+                axis=0
+            )
+
+            ax.plot(
+                common_time,
+                global_mean,
+                label=group.capitalize()
+            )
+
+            ax.fill_between(
+                common_time,
+                global_mean - global_std,
+                global_mean + global_std,
+                alpha=0.08
+            )
+
+            found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Time [s]"
+    )
+
+    if metric == "priority":
+        ax.set_ylabel("Priority")
+
+    elif metric == "battery":
+        ax.set_ylabel("Battery")
+
+    elif metric == "memory":
+        ax.set_ylabel("Memory")
+
+    elif metric == "compactness":
+        ax.set_ylabel("Mean distance [m]")
+
+    elif metric == "photosynthesis":
+        ax.set_ylabel("Photosynthesis")
+
+    ax.set_title(
+        f"{metric.capitalize()} - "
+        "Equal vs Reward\n"
+        "Mean across configurations"
+    )
+
+    ax.legend(
+        ncol=2
+    )
+
+    ax.grid(
+        alpha=0.25
+    )
+
+    save(
+        fig,
+        output_folder,
+        f"{metric}_equal_reward_all_configurations.png"
+    )
+
+
+# ============================================================
+# GLOBAL PHOTOSYNTHESIS SCALAR
+# ============================================================
+
+def get_photosynthesis_scalar_configuration_mean(
+    configuration_results,
+    config_name,
+    group
+):
+
+    group_data = get_group_data(
+        configuration_results,
+        config_name,
+        group
+    )
+
+    if group_data is None:
+        return None
+
+    experiment_values = []
+
+    for experiment in group_data["data"]:
+
+        df = experiment[
+            "photosynthesis"
+        ]
+
+        if df is None:
+            continue
+
+        numeric_columns = [
+            column
+            for column in df.columns
+            if column != "time"
+        ]
+
+        if len(numeric_columns) == 0:
+            continue
+
+        values = pd.to_numeric(
+            df[numeric_columns[0]],
+            errors="coerce"
+        ).dropna()
+
+        if len(values) == 0:
+            continue
+
+        experiment_values.append(
+            values.mean()
+        )
+
+    if len(experiment_values) == 0:
+        return None
+
+    return np.mean(
+        experiment_values
+    )
+
+
+def compare_equal_reward_all_configurations_photosynthesis_scalar(
+    configuration_results,
+    output_folder
+):
+
+    group_means = {
+        "equal": [],
+        "reward": []
+    }
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        for config_name in CONFIG_NAMES:
+
+            value = (
+                get_photosynthesis_scalar_configuration_mean(
+                    configuration_results,
+                    config_name,
+                    group
+                )
+            )
+
+            if value is not None:
+                group_means[group].append(
+                    value
+                )
+
+    if (
+        len(group_means["equal"]) == 0
+        and len(group_means["reward"]) == 0
+    ):
+        return
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    labels = []
+    means = []
+    stds = []
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        values = group_means[group]
+
+        if len(values) == 0:
+            continue
+
+        labels.append(
+            group.capitalize()
+        )
+
+        means.append(
+            np.mean(values)
+        )
+
+        stds.append(
+            np.std(values)
+        )
+
+    if len(means) == 0:
+
+        plt.close(fig)
+        return
+
+    x = np.arange(
+        len(means)
+    )
 
     ax.bar(
         x,
         means,
         yerr=stds,
-        capsize=5,
-        tick_label=["Equal", "Reward"]
+        capsize=3
     )
 
-    ax.set_ylabel("Occupancy [%]")
-    ax.set_title("Occupancy comparison")
-
-    save(
-        fig,
-        output_folder,
-        "comparison_occupancy"
+    ax.set_xticks(
+        x
     )
 
-    plt.close(fig)
-
-# ==========================================================
-# PART 4
-# EQUAL vs REWARD COMPARISON
-# ==========================================================
-
-# ==========================================================
-# COMPARISON: HEADING
-# ==========================================================
-
-def compare_heading(
-        equal_experiments,
-        reward_experiments,
-        output_folder):
-
-    def load_heading(experiments):
-
-        values = []
-
-        for exp in experiments:
-
-            file = os.path.join(
-                exp,
-                "plots",
-                "summary.csv"
-            )
-
-            if os.path.exists(file):
-
-                df = pd.read_csv(file)
-
-                values.append(
-                    df["Heading_%"].values
-                )
-
-        return np.array(values)
-
-
-    equal_values = load_heading(
-        equal_experiments
+    ax.set_xticklabels(
+        labels
     )
 
-    reward_values = load_heading(
-        reward_experiments
+    ax.set_ylabel(
+        "Mean photosynthesis"
     )
-
-
-    equal_mean = np.mean(
-        equal_values,
-        axis=0
-    )
-
-    equal_std = np.std(
-        equal_values,
-        axis=0
-    )
-
-
-    reward_mean = np.mean(
-        reward_values,
-        axis=0
-    )
-
-    reward_std = np.std(
-        reward_values,
-        axis=0
-    )
-
-
-    robots = [
-        "Robot1",
-        "Robot2",
-        "Robot3"
-    ]
-
-    x = np.arange(len(robots))
-
-    width = 0.35
-
-
-    fig, ax = plt.subplots(
-        figsize=get_figsize((7, 4))
-    )
-
-
-    ax.bar(
-        x - width/2,
-        equal_mean,
-        width,
-        yerr=equal_std,
-        capsize=5,
-        label="Equal"
-    )
-
-
-    ax.bar(
-        x + width/2,
-        reward_mean,
-        width,
-        yerr=reward_std,
-        capsize=5,
-        label="Reward"
-    )
-
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(robots)
-
-    ax.set_ylabel("% mission")
 
     ax.set_title(
-        "Heading comparison"
+        "Photosynthesis - Equal vs Reward\n"
+        "Mean across configurations"
     )
 
+    ax.grid(
+        axis="y",
+        alpha=0.25
+    )
 
     save(
         fig,
         output_folder,
-        "comparison_heading"
+        "photosynthesis_scalar_equal_reward_all_configurations.png"
     )
 
-    plt.close(fig)
-        # ==========================================================
-    # WAYPOINT TIME AS PERCENTAGE OF TOTAL MISSION TIME
-    # ==========================================================
 
-    def load_mission_times(experiments):
+# ============================================================
+# GLOBAL MISSION TIME
+# ============================================================
 
-        data = {
-            "Robot1": [],
-            "Robot2": [],
-            "Robot3": []
-        }
+def get_configuration_mission_means(
+    configuration_results,
+    config_name,
+    group
+):
 
-        for exp in experiments:
+    if config_name not in configuration_results:
+        return {}
 
-            file = os.path.join(
-                exp,
-                "mission_time_statistics.csv"
+    if group not in configuration_results[
+        config_name
+    ]:
+        return {}
+
+    experiments = configuration_results[
+        config_name
+    ][group]["experiments"]
+
+    robot_values = {
+        robot: []
+        for robot in ROBOTS
+    }
+
+    for experiment_path in experiments:
+
+        for robot in ROBOTS:
+
+            path = os.path.join(
+                experiment_path,
+                f"{robot}_mission_times.csv"
             )
 
-            if not os.path.exists(file):
-                print(f"WARNING: missing {file}")
+            if not os.path.exists(path):
                 continue
 
-            df = pd.read_csv(file)
-
-            for robot in data:
-
-                row = df[
-                    df["Agent"] == robot
-                ]
-
-                if not row.empty:
-
-                    value = row[
-                        "Mission time [s]"
-                    ].iloc[0]
-
-                    if pd.notna(value):
-                        data[robot].append(
-                            float(value)
-                        )
-
-        return data
-
-
-    equal_mission = load_mission_times(
-        equal_experiments
-    )
-
-    reward_mission = load_mission_times(
-        reward_experiments
-    )
-
-
-    # ------------------------------------------
-    # Mean total mission time
-    # ------------------------------------------
-
-    equal_mission_mean = np.array([
-        np.mean(equal_mission[robot])
-        for robot in robots
-    ])
-
-    reward_mission_mean = np.array([
-        np.mean(reward_mission[robot])
-        for robot in robots
-    ])
-
-
-def compare_waypoints(
-        equal_experiments,
-        reward_experiments,
-        output_folder):
-
-    robots = [
-        "Robot1",
-        "Robot2",
-        "Robot3"
-    ]
-
-    # ==========================================================
-    # LOAD WAYPOINT DATA
-    # ==========================================================
-
-    def load_waypoint_data(experiments):
-
-        data = []
-
-        for exp in experiments:
-
-            file = os.path.join(
-                exp,
-                "plots",
-                "waypoint_statistics.csv"
-            )
-
-            if os.path.exists(file):
+            try:
 
                 df = pd.read_csv(
-                    file,
-                    index_col=0
+                    path
                 )
 
-                data.append(
-                    df.values
+            except Exception:
+
+                continue
+
+            if (
+                "charging_completion_time"
+                not in df.columns
+            ):
+                continue
+
+            values = pd.to_numeric(
+                df[
+                    "charging_completion_time"
+                ],
+                errors="coerce"
+            ).dropna()
+
+            if len(values) == 0:
+                continue
+
+            robot_values[robot].append(
+                values.iloc[-1]
+            )
+
+    result = {}
+
+    for robot in ROBOTS:
+
+        values = robot_values[robot]
+
+        if len(values) > 0:
+
+            result[robot] = np.mean(
+                values
+            )
+
+    return result
+
+# ============================================================
+# GLOBAL WAYPOINT TIME
+# ============================================================
+
+def get_configuration_waypoint_time_means(
+    configuration_results,
+    config_name,
+    group
+):
+
+    if config_name not in configuration_results:
+        return None
+
+    if group not in configuration_results[
+        config_name
+    ]:
+        return None
+
+    experiments = configuration_results[
+        config_name
+    ][group]["experiments"]
+
+    waypoints = CONFIG_WAYPOINTS[
+        config_name
+    ]
+
+    values_by_waypoint = {
+        i: []
+        for i in range(N_WAYPOINTS)
+    }
+
+    for experiment_path in experiments:
+
+        for robot in ROBOTS:
+
+            path = os.path.join(
+                experiment_path,
+                f"{robot}_position.csv"
+            )
+
+            if not os.path.exists(path):
+                continue
+
+            try:
+
+                df = pd.read_csv(
+                    path
                 )
 
-        return np.array(data)
+            except Exception:
 
+                continue
 
-    equal_data = load_waypoint_data(
-        equal_experiments
+            if "time" not in df.columns:
+                continue
+
+            if (
+                "x" not in df.columns
+                or "y" not in df.columns
+            ):
+                continue
+
+            time = pd.to_numeric(
+                df["time"],
+                errors="coerce"
+            ).values
+
+            x = pd.to_numeric(
+                df["x"],
+                errors="coerce"
+            ).values
+
+            y = pd.to_numeric(
+                df["y"],
+                errors="coerce"
+            ).values
+
+            valid = (
+                np.isfinite(time)
+                & np.isfinite(x)
+                & np.isfinite(y)
+            )
+
+            time = time[valid]
+            x = x[valid]
+            y = y[valid]
+
+            if len(time) == 0:
+                continue
+
+            for waypoint_index, waypoint in enumerate(
+                waypoints
+            ):
+
+                distance = np.sqrt(
+                    (
+                        x - waypoint[0]
+                    ) ** 2
+                    + (
+                        y - waypoint[1]
+                    ) ** 2
+                )
+
+                indices = np.where(
+                    distance <= WAYPOINT_VISIT_THRESHOLD
+                )[0]
+
+                if len(indices) == 0:
+                    continue
+
+                first_time = time[
+                    indices[0]
+                ]
+
+                values_by_waypoint[
+                    waypoint_index
+                ].append(
+                    first_time - time[0]
+                )
+
+    result = []
+
+    for waypoint_index in range(
+        N_WAYPOINTS
+    ):
+
+        values = values_by_waypoint[
+            waypoint_index
+        ]
+
+        if len(values) == 0:
+            result.append(
+                np.nan
+            )
+        else:
+            result.append(
+                np.mean(values)
+            )
+
+    return np.array(
+        result
     )
 
-    reward_data = load_waypoint_data(
-        reward_experiments
-    )
 
+def compare_equal_reward_all_configurations_mission_time(
+    configuration_results,
+    output_folder
+):
 
-    # ==========================================================
-    # MEAN AND STD FOR EACH WAYPOINT
-    # ==========================================================
-
-    equal_mean = np.mean(
-        equal_data,
-        axis=0
-    )
-
-    equal_std = np.std(
-        equal_data,
-        axis=0
-    )
-
-    reward_mean = np.mean(
-        reward_data,
-        axis=0
-    )
-
-    reward_std = np.std(
-        reward_data,
-        axis=0
-    )
-
-
-    # ==========================================================
-    # TOTAL WAYPOINT TIME FOR EACH ROBOT
-    # ==========================================================
-
-    equal_mean_total = np.sum(
-        equal_mean,
-        axis=1
-    )
-
-    reward_mean_total = np.sum(
-        reward_mean,
-        axis=1
-    )
-
-    equal_std_total = np.sqrt(
-        np.sum(
-            equal_std ** 2,
-            axis=1
-        )
-    )
-
-    reward_std_total = np.sqrt(
-        np.sum(
-            reward_std ** 2,
-            axis=1
-        )
-    )
-
-
-    # ==========================================================
-    # ABSOLUTE WAYPOINT TIME COMPARISON
-    # ==========================================================
-
-    x = np.arange(
-        len(robots)
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
     )
 
     width = 0.35
 
-    fig, ax = plt.subplots(
-        figsize=get_figsize((7, 4))
+    # ============================================================
+    # Robot + Swarm
+    # ============================================================
+
+    labels = [
+        "Robot 1",
+        "Robot 2",
+        "Robot 3",
+        "Swarm"
+    ]
+
+    equal_means = []
+    equal_stds = []
+
+    reward_means = []
+    reward_stds = []
+
+    # ============================================================
+    # Robot 1, Robot 2, Robot 3
+    # ============================================================
+
+    for robot in ROBOTS:
+
+        equal_values = []
+        reward_values = []
+
+        for config_name in CONFIG_NAMES:
+
+            equal_result = (
+                get_configuration_mission_means(
+                    configuration_results,
+                    config_name,
+                    "equal"
+                )
+            )
+
+            reward_result = (
+                get_configuration_mission_means(
+                    configuration_results,
+                    config_name,
+                    "reward"
+                )
+            )
+
+            if robot in equal_result:
+                equal_values.append(
+                    equal_result[robot]
+                )
+
+            if robot in reward_result:
+                reward_values.append(
+                    reward_result[robot]
+                )
+
+        # Equal
+        if len(equal_values) > 0:
+
+            equal_means.append(
+                np.mean(equal_values)
+            )
+
+            equal_stds.append(
+                np.std(equal_values)
+            )
+
+        else:
+
+            equal_means.append(
+                np.nan
+            )
+
+            equal_stds.append(
+                0
+            )
+
+        # Reward
+        if len(reward_values) > 0:
+
+            reward_means.append(
+                np.mean(reward_values)
+            )
+
+            reward_stds.append(
+                np.std(reward_values)
+            )
+
+        else:
+
+            reward_means.append(
+                np.nan
+            )
+
+            reward_stds.append(
+                0
+            )
+
+    # ============================================================
+    # SWARM
+    # ============================================================
+    #
+    # Per ogni configurazione:
+    #
+    #     swarm_time =
+    #         max(Robot 1, Robot 2, Robot 3)
+    #
+    # Poi viene fatta la media tra config1/config2/config3.
+    #
+    # ============================================================
+
+    equal_swarm_values = []
+    reward_swarm_values = []
+
+    for config_name in CONFIG_NAMES:
+
+        equal_result = (
+            get_configuration_mission_means(
+                configuration_results,
+                config_name,
+                "equal"
+            )
+        )
+
+        reward_result = (
+            get_configuration_mission_means(
+                configuration_results,
+                config_name,
+                "reward"
+            )
+        )
+
+        # --------------------------------------------------------
+        # Equal swarm
+        # --------------------------------------------------------
+
+        equal_robot_values = []
+
+        for robot in ROBOTS:
+
+            if robot in equal_result:
+
+                value = equal_result[robot]
+
+                if np.isfinite(value):
+                    equal_robot_values.append(
+                        value
+                    )
+
+        if len(equal_robot_values) == len(ROBOTS):
+
+            equal_swarm_values.append(
+                max(equal_robot_values)
+            )
+
+        # --------------------------------------------------------
+        # Reward swarm
+        # --------------------------------------------------------
+
+        reward_robot_values = []
+
+        for robot in ROBOTS:
+
+            if robot in reward_result:
+
+                value = reward_result[robot]
+
+                if np.isfinite(value):
+                    reward_robot_values.append(
+                        value
+                    )
+
+        if len(reward_robot_values) == len(ROBOTS):
+
+            reward_swarm_values.append(
+                max(reward_robot_values)
+            )
+
+    # ------------------------------------------------------------
+    # Append swarm statistics
+    # ------------------------------------------------------------
+
+    if len(equal_swarm_values) > 0:
+
+        equal_means.append(
+            np.mean(equal_swarm_values)
+        )
+
+        equal_stds.append(
+            np.std(equal_swarm_values)
+        )
+
+    else:
+
+        equal_means.append(
+            np.nan
+        )
+
+        equal_stds.append(
+            0
+        )
+
+    if len(reward_swarm_values) > 0:
+
+        reward_means.append(
+            np.mean(reward_swarm_values)
+        )
+
+        reward_stds.append(
+            np.std(reward_swarm_values)
+        )
+
+    else:
+
+        reward_means.append(
+            np.nan
+        )
+
+        reward_stds.append(
+            0
+        )
+
+    # ============================================================
+    # Plot
+    # ============================================================
+
+    x = np.arange(
+        len(labels)
     )
 
     ax.bar(
         x - width / 2,
-        equal_mean_total,
+        equal_means,
         width,
-        yerr=equal_std_total,
-        capsize=5,
-        label="Equal"
-    )
-
-    ax.bar(
-        x + width / 2,
-        reward_mean_total,
-        width,
-        yerr=reward_std_total,
-        capsize=5,
-        label="Reward"
-    )
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(robots)
-
-    ax.set_ylabel(
-        "Time [s]"
-    )
-
-    ax.set_title(
-        "Waypoint time comparison"
-    )
-
-    ax.legend()
-
-    ax.grid(
-        axis="y",
-        alpha=0.3
-    )
-
-    save(
-        fig,
-        output_folder,
-        "comparison_waypoint"
-    )
-
-    plt.close(fig)
-
-
-    # ==========================================================
-    # LOAD MISSION TIMES
-    # ==========================================================
-
-    def load_mission_times(experiments):
-
-        data = {
-            "Robot1": [],
-            "Robot2": [],
-            "Robot3": []
-        }
-
-        for exp in experiments:
-
-            file = os.path.join(
-                exp,
-                "mission_time_statistics.csv"
-            )
-
-            if not os.path.exists(file):
-
-                print(
-                    f"WARNING: missing {file}"
-                )
-
-                continue
-
-            df = pd.read_csv(file)
-
-            for robot in robots:
-
-                row = df[
-                    df["Agent"] == robot
-                ]
-
-                if not row.empty:
-
-                    value = row[
-                        "Mission time [s]"
-                    ].iloc[0]
-
-                    if pd.notna(value):
-
-                        data[robot].append(
-                            float(value)
-                        )
-
-        return data
-
-
-    equal_mission = load_mission_times(
-        equal_experiments
-    )
-
-    reward_mission = load_mission_times(
-        reward_experiments
-    )
-
-
-    # ==========================================================
-    # WAYPOINT TIME AS % OF MISSION TIME
-    #
-    # IMPORTANT:
-    # Calculate the ratio for EACH experiment first.
-    #
-    # percentage_i =
-    #       total_waypoint_time_i
-    #       ---------------------- * 100
-    #       mission_time_i
-    #
-    # Then calculate mean and SEM across experiments.
-    # ==========================================================
-
-    def calculate_percentage(
-            experiments,
-            mission_data):
-
-        percentage = {
-            robot: []
-            for robot in robots
-        }
-
-        for exp in experiments:
-
-            # ------------------------------------------
-            # Load waypoint statistics for this experiment
-            # ------------------------------------------
-
-            waypoint_file = os.path.join(
-                exp,
-                "plots",
-                "waypoint_statistics.csv"
-            )
-
-            if not os.path.exists(waypoint_file):
-
-                print(
-                    f"WARNING: missing {waypoint_file}"
-                )
-
-                continue
-
-            waypoint_df = pd.read_csv(
-                waypoint_file,
-                index_col=0
-            )
-
-            waypoint_values = waypoint_df.values
-
-
-            # ------------------------------------------
-            # Load mission time for this experiment
-            # ------------------------------------------
-
-            mission_file = os.path.join(
-                exp,
-                "mission_time_statistics.csv"
-            )
-
-            if not os.path.exists(mission_file):
-
-                print(
-                    f"WARNING: missing {mission_file}"
-                )
-
-                continue
-
-            mission_df = pd.read_csv(
-                mission_file
-            )
-
-
-            # ------------------------------------------
-            # Calculate percentage for each robot
-            # ------------------------------------------
-
-            for r, robot in enumerate(robots):
-
-                row = mission_df[
-                    mission_df["Agent"] == robot
-                ]
-
-                if row.empty:
-                    continue
-
-                mission_time = row[
-                    "Mission time [s]"
-                ].iloc[0]
-
-                if pd.isna(mission_time):
-                    continue
-
-                mission_time = float(
-                    mission_time
-                )
-
-                if mission_time <= 0:
-                    continue
-
-                # Sum waypoint times for this robot
-                waypoint_time = np.sum(
-                    waypoint_values[r]
-                )
-
-                percentage[robot].append(
-                    waypoint_time
-                    / mission_time
-                    * 100
-                )
-
-        return percentage
-
-
-    equal_percentage_values = calculate_percentage(
-        equal_experiments,
-        equal_mission
-    )
-
-    reward_percentage_values = calculate_percentage(
-        reward_experiments,
-        reward_mission
-    )
-
-
-    # ==========================================================
-    # MEAN + SEM
-    # ==========================================================
-
-    equal_percentage = np.array([
-        np.mean(
-            equal_percentage_values[robot]
-        )
-        for robot in robots
-    ])
-
-    equal_percentage_sem = np.array([
-        np.std(
-            equal_percentage_values[robot],
-            ddof=1
-        )
-        / np.sqrt(
-            len(equal_percentage_values[robot])
-        )
-        for robot in robots
-    ])
-
-
-    reward_percentage = np.array([
-        np.mean(
-            reward_percentage_values[robot]
-        )
-        for robot in robots
-    ])
-
-    reward_percentage_sem = np.array([
-        np.std(
-            reward_percentage_values[robot],
-            ddof=1
-        )
-        / np.sqrt(
-            len(reward_percentage_values[robot])
-        )
-        for robot in robots
-    ])
-
-
-    # ==========================================================
-    # DEBUG
-    # ==========================================================
-
-    print(
-        "\nWaypoint time / mission time:"
-    )
-
-    for i, robot in enumerate(robots):
-
-        print(
-            f"{robot}: "
-            f"Equal = "
-            f"{equal_percentage[i]:.2f} "
-            f"+/- "
-            f"{equal_percentage_sem[i]:.2f} %, "
-            f"Reward = "
-            f"{reward_percentage[i]:.2f} "
-            f"+/- "
-            f"{reward_percentage_sem[i]:.2f} %"
-        )
-
-
-    # ==========================================================
-    # PERCENTAGE COMPARISON
-    # ==========================================================
-
-    fig, ax = plt.subplots(
-        figsize=get_figsize((7, 4))
-    )
-
-    ax.bar(
-        x - width / 2,
-        equal_percentage,
-        width,
-        yerr=equal_percentage_sem,
+        yerr=equal_stds,
         capsize=3,
         label="Equal"
     )
 
     ax.bar(
         x + width / 2,
-        reward_percentage,
+        reward_means,
         width,
-        yerr=reward_percentage_sem,
+        yerr=reward_stds,
         capsize=3,
         label="Reward"
     )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(robots)
+    ax.set_xticks(
+        x
+    )
+
+    ax.set_xticklabels(
+        labels
+    )
 
     ax.set_ylabel(
-        "Waypoint time / Mission time [%]"
+        "Mission time [s]"
     )
 
     ax.set_title(
-        "Waypoint time as percentage of mission time"
+        "Mission time - Equal vs Reward\n"
+        "Mean across configurations"
     )
 
     ax.legend()
 
     ax.grid(
         axis="y",
-        alpha=0.3
+        alpha=0.25
     )
 
     save(
         fig,
         output_folder,
-        "comparison_waypoint_percentage"
+        "mission_time_equal_reward_all_configurations.png"
     )
 
-    plt.close(fig)
+# ============================================================
+# GLOBAL WAYPOINT PERCENTAGE
+# ============================================================
 
-# ==========================================================
-# PHOTOSYNTHESIS
-# ==========================================================
-
-def read_photosynthesis(experiment):
-
-    file = os.path.join(
-        experiment,
-        "photosynthesis_log.csv"
-    )
-
-    if not os.path.exists(file):
-        print(f"WARNING: missing {file}")
-        return np.nan
-
-    df = pd.read_csv(file)
-
-    if "ph" not in df.columns:
-        print(f"WARNING: 'ph' column missing in {file}")
-        return np.nan
-
-    values = pd.to_numeric(
-        df["ph"],
-        errors="coerce"
-    ).dropna()
-
-    if len(values) == 0:
-        return np.nan
-
-    # Media della photosynthesis durante l'esperimento
-    return values.mean()
-
-def load_photosynthesis(exp_folder):
-    """
-    Load photosynthesis_log.csv and return time and photosynthesis.
-    Time is shifted so that each experiment starts from t = 0.
-    """
-
-    path = os.path.join(
-        exp_folder,
-        "photosynthesis_log.csv"
-    )
-
-    if not os.path.exists(path):
-        print(f"WARNING: {path} not found")
-        return None, None
-
-    df = pd.read_csv(path)
-
-    if "time" not in df.columns or "ph" not in df.columns:
-        print(f"WARNING: invalid photosynthesis file: {path}")
-        return None, None
-
-    df = df[["time", "ph"]].dropna()
-
-    if len(df) < 2:
-        return None, None
-
-    df = df.sort_values("time")
-
-    # Start from t = 0
-    t = df["time"].values
-    ph = df["ph"].values
-
-    t = t - t[0]
-
-    return t, ph
-def compare_photosynthesis(
-    equal_experiments,
-    reward_experiments,
-    output_dir
+def get_configuration_waypoint_percentage_means(
+    configuration_results,
+    config_name,
+    group
 ):
-    """
-    Compare photosynthesis production over time
-    between Equal and Reward experiments.
-    """
 
-    equal_data = []
-    reward_data = []
+    if config_name not in configuration_results:
+        return None
 
-    # ======================================================
-    # LOAD EQUAL
-    # ======================================================
+    if group not in configuration_results[
+        config_name
+    ]:
+        return None
 
-    for exp in equal_experiments:
+    experiments = configuration_results[
+        config_name
+    ][group]["experiments"]
 
-        t, ph = load_photosynthesis(exp)
+    waypoints = CONFIG_WAYPOINTS[
+        config_name
+    ]
 
-        if t is not None:
-            equal_data.append((t, ph))
+    robot_values = {
+        robot: []
+        for robot in ROBOTS
+    }
 
-    # ======================================================
-    # LOAD REWARD
-    # ======================================================
+    for experiment_path in experiments:
 
-    for exp in reward_experiments:
+        for robot in ROBOTS:
 
-        t, ph = load_photosynthesis(exp)
+            path = os.path.join(
+                experiment_path,
+                f"{robot}_position.csv"
+            )
 
-        if t is not None:
-            reward_data.append((t, ph))
+            if not os.path.exists(path):
+                continue
 
-    if len(equal_data) == 0 or len(reward_data) == 0:
-        print("WARNING: no photosynthesis data available")
+            try:
+
+                df = pd.read_csv(
+                    path
+                )
+
+            except Exception:
+
+                continue
+
+            visited = 0
+
+            for waypoint in waypoints:
+
+                if (
+                    count_waypoint_visits(
+                        df,
+                        waypoint
+                    ) > 0
+                ):
+                    visited += 1
+
+            percentage = (
+                100.0
+                * visited
+                / len(waypoints)
+            )
+
+            robot_values[
+                robot
+            ].append(
+                percentage
+            )
+
+    result = {}
+
+    for robot in ROBOTS:
+
+        values = robot_values[
+            robot
+        ]
+
+        if len(values) > 0:
+
+            result[robot] = np.mean(
+                values
+            )
+
+    return result
+
+# ============================================================
+# GLOBAL WAYPOINT TIME - EQUAL VS REWARD
+# ============================================================
+
+def compare_equal_reward_all_configurations_waypoint_time(
+    configuration_results,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    width = 0.35
+
+    equal_means = []
+    equal_stds = []
+
+    reward_means = []
+    reward_stds = []
+
+    waypoint_labels = [
+        f"WP {i + 1}"
+        for i in range(N_WAYPOINTS)
+    ]
+
+    # ========================================================
+    # Equal vs Reward
+    # ========================================================
+
+    for waypoint_index in range(N_WAYPOINTS):
+
+        equal_values = []
+        reward_values = []
+
+        for config_name in CONFIG_NAMES:
+
+            # ------------------------------------------------
+            # Equal
+            # ------------------------------------------------
+
+            equal_result = (
+                get_configuration_waypoint_time_means(
+                    configuration_results,
+                    config_name,
+                    "equal"
+                )
+            )
+
+            if equal_result is not None:
+
+                value = equal_result[waypoint_index]
+
+                if np.isfinite(value):
+
+                    equal_values.append(
+                        value
+                    )
+
+            # ------------------------------------------------
+            # Reward
+            # ------------------------------------------------
+
+            reward_result = (
+                get_configuration_waypoint_time_means(
+                    configuration_results,
+                    config_name,
+                    "reward"
+                )
+            )
+
+            if reward_result is not None:
+
+                value = reward_result[waypoint_index]
+
+                if np.isfinite(value):
+
+                    reward_values.append(
+                        value
+                    )
+
+        # ----------------------------------------------------
+        # Equal statistics
+        # ----------------------------------------------------
+
+        if len(equal_values) > 0:
+
+            equal_means.append(
+                np.mean(equal_values)
+            )
+
+            equal_stds.append(
+                np.std(equal_values)
+            )
+
+        else:
+
+            equal_means.append(
+                np.nan
+            )
+
+            equal_stds.append(
+                0
+            )
+
+        # ----------------------------------------------------
+        # Reward statistics
+        # ----------------------------------------------------
+
+        if len(reward_values) > 0:
+
+            reward_means.append(
+                np.mean(reward_values)
+            )
+
+            reward_stds.append(
+                np.std(reward_values)
+            )
+
+        else:
+
+            reward_means.append(
+                np.nan
+            )
+
+            reward_stds.append(
+                0
+            )
+
+    # ========================================================
+    # Plot
+    # ========================================================
+
+    x = np.arange(
+        N_WAYPOINTS
+    )
+
+    ax.bar(
+        x - width / 2,
+        equal_means,
+        width,
+        yerr=equal_stds,
+        capsize=3,
+        label="Equal"
+    )
+
+    ax.bar(
+        x + width / 2,
+        reward_means,
+        width,
+        yerr=reward_stds,
+        capsize=3,
+        label="Reward"
+    )
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.set_xticklabels(
+        waypoint_labels
+    )
+
+    ax.set_ylabel(
+        "First visit time [s]"
+    )
+
+    ax.set_title(
+        "Waypoint first visit time - Equal vs Reward\n"
+        "Mean across configurations"
+    )
+
+    ax.legend()
+
+    ax.grid(
+        axis="y",
+        alpha=0.25
+    )
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_time_equal_reward_all_configurations.png"
+    )
+
+def compare_equal_reward_all_configurations_waypoint_percentage(
+    configuration_results,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
+    )
+
+    equal_values = []
+    reward_values = []
+
+    valid_robots = []
+
+    for robot in ROBOTS:
+
+        equal_config_values = []
+        reward_config_values = []
+
+        for config_name in CONFIG_NAMES:
+
+            equal_result = (
+                get_configuration_waypoint_percentage_means(
+                    configuration_results,
+                    config_name,
+                    "equal"
+                )
+            )
+
+            reward_result = (
+                get_configuration_waypoint_percentage_means(
+                    configuration_results,
+                    config_name,
+                    "reward"
+                )
+            )
+
+            if robot in equal_result:
+                equal_config_values.append(
+                    equal_result[robot]
+                )
+
+            if robot in reward_result:
+                reward_config_values.append(
+                    reward_result[robot]
+                )
+
+        if (
+            len(equal_config_values) == 0
+            and len(reward_config_values) == 0
+        ):
+            continue
+
+        valid_robots.append(
+            robot
+        )
+
+        equal_values.append(
+            np.mean(equal_config_values)
+            if len(equal_config_values) > 0
+            else np.nan
+        )
+
+        reward_values.append(
+            np.mean(reward_config_values)
+            if len(reward_config_values) > 0
+            else np.nan
+        )
+
+    if len(valid_robots) == 0:
+
+        plt.close(fig)
         return
 
-    # ======================================================
-    # COMMON TIME AXIS
-    # ======================================================
-
-    max_equal_time = max(
-        t[-1] for t, ph in equal_data
+    x = np.arange(
+        len(valid_robots)
     )
 
-    max_reward_time = max(
-        t[-1] for t, ph in reward_data
+    width = 0.35
+
+    ax.bar(
+        x - width / 2,
+        equal_values,
+        width,
+        label="Equal"
     )
 
-    max_time = min(
-        max_equal_time,
-        max_reward_time
+    ax.bar(
+        x + width / 2,
+        reward_values,
+        width,
+        label="Reward"
     )
 
-    # Use the same temporal resolution as the aggregation
-    dt = 0.1
+    ax.set_xticks(
+        x
+    )
 
-    common_t = np.arange(
+    ax.set_xticklabels([
+        ROBOT_LABELS[robot]
+        for robot in valid_robots
+    ])
+
+    ax.set_ylabel(
+        "Waypoints visited [%]"
+    )
+
+    ax.set_ylim(
         0,
-        max_time,
-        dt
+        100
     )
 
-    # ======================================================
-    # INTERPOLATE EACH EXPERIMENT
-    # ======================================================
-
-    equal_interp = []
-
-    for t, ph in equal_data:
-
-        valid = (
-            (common_t >= t[0]) &
-            (common_t <= t[-1])
-        )
-
-        interpolated = np.full(
-            len(common_t),
-            np.nan
-        )
-
-        interpolated[valid] = np.interp(
-            common_t[valid],
-            t,
-            ph
-        )
-
-        equal_interp.append(interpolated)
-
-    reward_interp = []
-
-    for t, ph in reward_data:
-
-        valid = (
-            (common_t >= t[0]) &
-            (common_t <= t[-1])
-        )
-
-        interpolated = np.full(
-            len(common_t),
-            np.nan
-        )
-
-        interpolated[valid] = np.interp(
-            common_t[valid],
-            t,
-            ph
-        )
-
-        reward_interp.append(interpolated)
-
-    equal_interp = np.array(equal_interp)
-    reward_interp = np.array(reward_interp)
-
-    # ======================================================
-    # MEAN AND STD
-    # ======================================================
-
-    equal_mean = np.nanmean(
-        equal_interp,
-        axis=0
+    ax.set_title(
+        "Waypoint coverage - Equal vs Reward\n"
+        "Mean across configurations"
     )
 
-    equal_std = np.nanstd(
-        equal_interp,
-        axis=0
+    ax.legend()
+    ax.grid(
+        axis="y",
+        alpha=0.25
     )
 
-    reward_mean = np.nanmean(
-        reward_interp,
-        axis=0
+    save(
+        fig,
+        output_folder,
+        "waypoint_percentage_equal_reward_all_configurations.png"
     )
 
-    reward_std = np.nanstd(
-        reward_interp,
-        axis=0
+
+# ============================================================
+# GLOBAL WAYPOINT VISITS
+# ============================================================
+
+def get_configuration_waypoint_visit_means(
+    configuration_results,
+    config_name,
+    group
+):
+
+    if config_name not in configuration_results:
+        return None
+
+    if group not in configuration_results[
+        config_name
+    ]:
+        return None
+
+    experiments = configuration_results[
+        config_name
+    ][group]["experiments"]
+
+    waypoints = CONFIG_WAYPOINTS[
+        config_name
+    ]
+
+    values_by_waypoint = {
+        i: []
+        for i in range(N_WAYPOINTS)
+    }
+
+    for waypoint_index, waypoint in enumerate(
+        waypoints
+    ):
+
+        for experiment_path in experiments:
+
+            for robot in ROBOTS:
+
+                path = os.path.join(
+                    experiment_path,
+                    f"{robot}_position.csv"
+                )
+
+                if not os.path.exists(path):
+                    continue
+
+                try:
+
+                    df = pd.read_csv(
+                        path
+                    )
+
+                except Exception:
+
+                    continue
+
+                values_by_waypoint[
+                    waypoint_index
+                ].append(
+                    count_waypoint_visits(
+                        df,
+                        waypoint
+                    )
+                )
+
+    result = []
+
+    for waypoint_index in range(
+        N_WAYPOINTS
+    ):
+
+        values = values_by_waypoint[
+            waypoint_index
+        ]
+
+        if len(values) == 0:
+            result.append(
+                np.nan
+            )
+        else:
+            result.append(
+                np.mean(values)
+            )
+
+    return np.array(
+        result
     )
 
-    # ======================================================
-    # SAVE DATA
-    # ======================================================
 
-    output_csv = os.path.join(
-        output_dir,
-        "comparison_photosynthesis.csv"
+def compare_equal_reward_all_configurations_waypoint_visits(
+    configuration_results,
+    output_folder
+):
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
     )
 
-    comparison = pd.DataFrame({
-        "time": common_t,
-        "equal_mean": equal_mean,
-        "equal_std": equal_std,
-        "reward_mean": reward_mean,
-        "reward_std": reward_std
-    })
+    x = np.arange(
+        1,
+        N_WAYPOINTS + 1
+    )
 
-    comparison.to_csv(
-        output_csv,
+    found = False
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        configuration_curves = []
+
+        for config_name in CONFIG_NAMES:
+
+            curve = (
+                get_configuration_waypoint_visit_means(
+                    configuration_results,
+                    config_name,
+                    group
+                )
+            )
+
+            if curve is not None:
+                configuration_curves.append(
+                    curve
+                )
+
+        if len(configuration_curves) == 0:
+            continue
+
+        matrix = np.array(
+            configuration_curves,
+            dtype=float
+        )
+
+        mean = np.nanmean(
+            matrix,
+            axis=0
+        )
+
+        std = np.nanstd(
+            matrix,
+            axis=0
+        )
+
+        ax.plot(
+            x,
+            mean,
+            marker="o",
+            label=group.capitalize()
+        )
+
+        ax.fill_between(
+            x,
+            mean - std,
+            mean + std,
+            alpha=0.08
+        )
+
+        found = True
+
+    if not found:
+
+        plt.close(fig)
+        return
+
+    ax.set_xlabel(
+        "Waypoint"
+    )
+
+    ax.set_ylabel(
+        "Mean number of visits"
+    )
+
+    ax.set_title(
+        "Waypoint visits - Equal vs Reward\n"
+        "Mean across configurations"
+    )
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.legend()
+    ax.grid(alpha=0.25)
+
+    save(
+        fig,
+        output_folder,
+        "waypoint_visits_equal_reward_all_configurations.png"
+    )
+
+
+# ============================================================
+# GLOBAL SUMMARY CSV
+# ============================================================
+
+def create_global_waypoint_summary_csv(
+    configuration_results,
+    output_folder
+):
+
+    rows = []
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        for config_name in CONFIG_NAMES:
+
+            curve = (
+                get_configuration_waypoint_visit_means(
+                    configuration_results,
+                    config_name,
+                    group
+                )
+            )
+
+            if curve is None:
+                continue
+
+            for waypoint_index, value in enumerate(
+                curve,
+                start=1
+            ):
+
+                rows.append({
+                    "configuration": config_name,
+                    "group": group,
+                    "waypoint": waypoint_index,
+                    "mean_visits": value
+                })
+
+    if len(rows) == 0:
+        return
+
+    df = pd.DataFrame(
+        rows
+    )
+
+    path = os.path.join(
+        output_folder,
+        "waypoint_visits_all_configurations.csv"
+    )
+
+    df.to_csv(
+        path,
         index=False
     )
 
-    # ======================================================
-    # PLOT
-    # ======================================================
-
-    plt.figure(figsize=RAL_FIGSIZE)
-
-    plt.plot(
-        common_t,
-        equal_mean,
-        label="Equal",
-        linewidth=1.2
+    print(
+        f"Saved: {path}"
     )
 
-    plt.fill_between(
-        common_t,
-        equal_mean - equal_std,
-        equal_mean + equal_std,
-        alpha=0.2
+
+# ============================================================
+# ALL CONFIGURATION COMPARISONS
+# ============================================================
+
+def compare_all_configurations(
+    configuration_results
+):
+
+    os.makedirs(
+        CONFIG_COMPARISON_DIR,
+        exist_ok=True
     )
 
-    plt.plot(
-        common_t,
-        reward_mean,
-        label="Reward",
-        linewidth=1.2
+    for group in GROUPS:
+
+        compare_time_series(
+            configuration_results,
+            group,
+            "priority",
+            CONFIG_COMPARISON_DIR
+        )
+
+        compare_time_series(
+            configuration_results,
+            group,
+            "battery",
+            CONFIG_COMPARISON_DIR
+        )
+
+        compare_waypoint_visits_configurations(
+            configuration_results,
+            group,
+            CONFIG_COMPARISON_DIR
+        )
+
+
+# ============================================================
+# ALL EQUAL VS REWARD COMPARISONS
+# ============================================================
+
+def compare_equal_reward_all(
+    configuration_results
+):
+
+    for config_name in CONFIG_NAMES:
+
+        if config_name not in configuration_results:
+            continue
+
+        output_folder = os.path.join(
+            CONFIG_COMPARISON_DIR,
+            config_name
+        )
+
+        os.makedirs(
+            output_folder,
+            exist_ok=True
+        )
+
+        # ----------------------------------------------------
+        # Time series
+        # ----------------------------------------------------
+
+        compare_equal_reward_time_series(
+            configuration_results,
+            config_name,
+            "priority",
+            output_folder
+        )
+
+        compare_equal_reward_time_series(
+            configuration_results,
+            config_name,
+            "battery",
+            output_folder
+        )
+
+        compare_equal_reward_time_series(
+            configuration_results,
+            config_name,
+            "memory",
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Photosynthesis
+        # ----------------------------------------------------
+
+        compare_equal_reward_photosynthesis(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Scalar metrics
+        # ----------------------------------------------------
+
+        compare_equal_reward_scalar_metric(
+            configuration_results,
+            config_name,
+            "photosynthesis",
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Mission time
+        # ----------------------------------------------------
+
+        compare_equal_reward_mission_time(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Waypoint time
+        # ----------------------------------------------------
+
+        compare_equal_reward_waypoint_time(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Waypoint percentage
+        # ----------------------------------------------------
+
+        compare_equal_reward_waypoint_percentage(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Compactness
+        # ----------------------------------------------------
+
+        compare_equal_reward_compactness(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+        # ----------------------------------------------------
+        # Waypoint visits
+        # ----------------------------------------------------
+
+        compare_waypoint_visits_equal_reward(
+            configuration_results,
+            config_name,
+            output_folder
+        )
+
+
+# ============================================================
+# NEW:
+# EQUAL VS REWARD AVERAGED OVER ALL CONFIGURATIONS
+# ============================================================
+
+def compare_equal_reward_all_configurations(
+    configuration_results
+):
+
+    os.makedirs(
+        ALL_CONFIG_EQUAL_REWARD_DIR,
+        exist_ok=True
     )
-
-    plt.fill_between(
-        common_t,
-        reward_mean - reward_std,
-        reward_mean + reward_std,
-        alpha=0.2
-    )
-
-    plt.xlabel("Time [s]")
-    plt.ylabel("Photosynthesis production")
-    plt.legend()
-
-    plt.tight_layout()
-
-    output_plot = os.path.join(
-        output_dir,
-        "comparison_photosynthesis.png"
-    )
-
-    plt.savefig(
-        output_plot,
-        dpi=300,
-        bbox_inches="tight"
-    )
-
-    plt.close()
 
     print(
-        f"Photosynthesis comparison saved to:\n"
-        f"  {output_plot}\n"
-        f"  {output_csv}"
+        "\n"
+        "------------------------------------------------------------\n"
+        " Equal vs Reward averaged across configurations\n"
+        "------------------------------------------------------------"
     )
 
-comparison_output = os.path.join(
-    OUTPUT_DIR,
-    "comparison"
-)
+    # --------------------------------------------------------
+    # Time-series metrics
+    # --------------------------------------------------------
 
-os.makedirs(
-    comparison_output,
-    exist_ok=True
-)
+    for metric in [
+        "priority",
+        "battery",
+        "memory",
+        "compactness",
+        "photosynthesis"
+    ]:
+
+        compare_equal_reward_all_configurations_time_series(
+            configuration_results,
+            metric,
+            ALL_CONFIG_EQUAL_REWARD_DIR
+        )
+
+    # --------------------------------------------------------
+    # Scalar photosynthesis
+    # --------------------------------------------------------
+
+    compare_equal_reward_all_configurations_photosynthesis_scalar(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # Mission time
+    # --------------------------------------------------------
+
+    compare_equal_reward_all_configurations_mission_time(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # Waypoint time
+    # --------------------------------------------------------
+
+    compare_equal_reward_all_configurations_waypoint_time(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # Waypoint percentage
+    # --------------------------------------------------------
+
+    compare_equal_reward_all_configurations_waypoint_percentage(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # Waypoint visits
+    # --------------------------------------------------------
+
+    compare_equal_reward_all_configurations_waypoint_visits(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # CSV with configuration-level waypoint statistics
+    # --------------------------------------------------------
+
+    create_global_waypoint_summary_csv(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # No Equal-vs-Reward averaged trajectory plot is created.
+    #
+    # config1/config2/config3 have different waypoint
+    # positions and therefore different spatial layouts.
+    # Averaging x/y trajectories across configurations would
+    # produce a trajectory without a physically meaningful
+    # interpretation.
+    #
+    # The trajectory plots remain available separately inside
+    # each configuration.
+    # --------------------------------------------------------
+
+    print(
+        "\n"
+        "NOTE: Equal-vs-Reward averaged trajectories were NOT "
+        "generated because config1/config2/config3 have "
+        "different spatial layouts and waypoint coordinates."
+    )
 
 
-print("\nGenerating Equal vs Reward comparisons...")
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print(
+        "\n"
+        "============================================================\n"
+        " AGGREGATE RESULTS\n"
+        "============================================================\n"
+    )
+
+    print(
+        f"Base path: {BASE_PATH}"
+    )
+
+    print(
+        f"RAL mode: {RAL_MODE}"
+    )
+
+    print(
+        f"Waypoint visit threshold: "
+        f"{WAYPOINT_VISIT_THRESHOLD} m"
+    )
+
+    configuration_results = {}
+
+    # --------------------------------------------------------
+    # Process all configurations
+    # --------------------------------------------------------
+
+    for config_name in CONFIG_NAMES:
+
+        config_path = os.path.join(
+            BASE_PATH,
+            config_name
+        )
+
+        if not os.path.isdir(
+            config_path
+        ):
+
+            print(
+                f"\nSkipping {config_name}: "
+                f"folder not found."
+            )
+
+            continue
+
+        print(
+            f"\nProcessing {config_name}..."
+        )
+
+        configuration_results[
+            config_name
+        ] = process_configuration(
+            config_name
+        )
+
+    # --------------------------------------------------------
+    # Configuration comparisons
+    # --------------------------------------------------------
+
+    print(
+        "\n"
+        "============================================================\n"
+        " CONFIGURATION COMPARISONS\n"
+        "============================================================\n"
+    )
+
+    compare_all_configurations(
+        configuration_results
+    )
+
+    # --------------------------------------------------------
+    # Equal vs Reward comparisons
+    # --------------------------------------------------------
+
+    print(
+        "\n"
+        "============================================================\n"
+        " EQUAL VS REWARD COMPARISONS\n"
+        "============================================================\n"
+    )
+
+    compare_equal_reward_all(
+        configuration_results
+    )
+
+    # --------------------------------------------------------
+    # Equal vs Reward averaged across configurations
+    # --------------------------------------------------------
+
+    print(
+        "\n"
+        "============================================================\n"
+        " EQUAL VS REWARD - AVERAGE ACROSS CONFIGURATIONS\n"
+        "============================================================\n"
+    )
+
+    compare_equal_reward_all_configurations(
+        configuration_results
+    )
+
+    print(
+        "\n"
+        "============================================================\n"
+        " DONE\n"
+        "============================================================\n"
+    )
+
+    print(
+        "\nGenerated global Equal-vs-Reward results in:"
+    )
+
+    print(
+        ALL_CONFIG_EQUAL_REWARD_DIR
+    )
+
+    compare_equal_reward_mission_time_all_configurations(
+        configuration_results,
+        ALL_CONFIG_EQUAL_REWARD_DIR
+        
+    )
 
 
-compare_occupancy(
-    equal_experiments,
-    reward_experiments,
-    comparison_output
-)
-
-
-compare_heading(
-    equal_experiments,
-    reward_experiments,
-    comparison_output
-)
-
-
-compare_waypoints(
-    equal_experiments,
-    reward_experiments,
-    comparison_output
-)
-compare_mission_time(
-    equal_experiments,
-    reward_experiments,
-    comparison_output
-)
-compare_swarm_compactness(
-    equal_data,
-    reward_data,
-    comparison_output
-)
-compare_photosynthesis(
-    equal_experiments,
-    reward_experiments,
-    comparison_output
-)
-
-print(
-    "\nComparison plots generated."
-)
+if __name__ == "__main__":
+    main()

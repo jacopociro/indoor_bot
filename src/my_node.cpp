@@ -140,7 +140,7 @@ private:
     double motor_kt_ = 0.017;           // Nm/A
     double drivetrain_efficiency_ = 0.85;
     double aux_current_ = 0.8;          // A
-    double Radis_curv = 0.05;          // m
+    double Radis_curv = 0.0;          // m
 
     // Thevenin ECM
     double R0_ = 0.15;                  // ohm

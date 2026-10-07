@@ -5,10 +5,10 @@ import argparse
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import yaml
 
 from shapely.geometry import LineString, box
 from shapely.ops import unary_union
+
 
 # ==================================================
 # RAL FIGURE FORMAT
@@ -45,17 +45,12 @@ plt.rcParams.update({
     "ps.fonttype": 42,
 })
 
+
 # ==================================================
 # CONFIGURATION
 # ==================================================
 
 parser = argparse.ArgumentParser()
-
-parser.add_argument(
-    "--experiment",
-    required=True,
-    help="Cartella dell'esperimento"
-)
 
 parser.add_argument(
     "--noshow",
@@ -68,11 +63,13 @@ parser.add_argument(
     action="store_true",
     help="Use RAL/IEEE paper plot formatting"
 )
+
 args = parser.parse_args()
 
 RAL_FIGSIZE = (4.0, 3.0)
 
 if args.ral:
+
     plt.rcParams.update({
         "font.family": "serif",
         "font.size": 8,
@@ -96,8 +93,22 @@ def get_figsize(default):
     """Return the RAL figure size when --ral is enabled."""
     return RAL_FIGSIZE if args.ral else default
 
-EXPERIMENT_FOLDER = args.experiment
-CSV_FOLDER = EXPERIMENT_FOLDER
+
+# ==================================================
+# BASE PATH
+# ==================================================
+
+BASE_PATH = (
+    "/home/gonazza/container_ws/"
+    "catkin_ws/src/indoor_bot/indoor_bot"
+)
+
+
+CONFIGURATIONS = [
+    "config1",
+    "config2",
+    "config3",
+]
 
 
 # ==================================================
@@ -112,51 +123,15 @@ MISSION_TIME_FILES = [
 
 
 # ==================================================
-# OUTPUT
-# ==================================================
-
-OUTPUT_DIR = os.path.join(
-    CSV_FOLDER,
-    "plots"
-)
-
-os.makedirs(
-    OUTPUT_DIR,
-    exist_ok=True
-)
-
-
-LOG_FILE = os.path.join(
-    OUTPUT_DIR,
-    "results.log"
-)
-
-
-# ==================================================
 # COVERAGE PARAMETERS
 # ==================================================
 
-ROBOT_RADIUS = 2.5       # meters
+ROBOT_RADIUS = 2.5
 
 
 # ==================================================
 # COLORS
 # ==================================================
-#
-# Puoi modificare liberamente questi colori.
-#
-# Esempi:
-# "lightgreen"
-# "green"
-# "lime"
-# "#90EE90"
-# "#00FF00"
-#
-# oppure colori matplotlib:
-# "tab:green"
-# "tab:blue"
-# etc.
-#
 
 COVERED_COLOR = "green"
 UNCOVERED_COLOR = "white"
@@ -185,10 +160,6 @@ YMAX = 4.0
 # ==================================================
 # AREAS TO EXCLUDE
 # ==================================================
-#
-# Format:
-# (xmin, xmax, ymin, ymax)
-#
 
 EMPTY_AREAS = [
     (-4.0, -1.0, -6.0, -1.0),
@@ -205,52 +176,158 @@ EMPTY_AREAS = [
 # WAYPOINTS
 # ==================================================
 
-WAYPOINTS_FILE = (
-    "/home/gonazza/container_ws/"
-    "catkin_ws/src/indoor_bot/config/waypoints.yaml"
-)
+WAYPOINTS = {
+
+    "config1": [
+        (-6.5, -1.0),
+        (3.0, 2.0),
+        (3.5, -3.5),
+        (-10.0, 2.0),
+        (4.0, -2.5),
+    ],
+
+    "config2": [
+        (-3.0, 0.0),
+        (5.0, 2.5),
+        (2.5, -4.5),
+        (-10.0, 0.0),
+        (5.0, -1.5),
+    ],
+
+    "config3": [
+        (-5.0, 2.0),
+        (4.0, 2.0),
+        (0.0, -3.0),
+        (-9.0, 3.0),
+        (-8.0, -1.0),
+    ],
+}
 
 
-def read_waypoints(yaml_file):
+# ==================================================
+# GET WAYPOINTS
+# ==================================================
 
-    waypoints = []
+def get_waypoints(config_name):
 
-    if os.path.exists(yaml_file):
+    if config_name not in WAYPOINTS:
 
-        with open(yaml_file, "r") as f:
+        raise ValueError(
+            f"Unknown configuration '{config_name}'. "
+            f"Available configurations: "
+            f"{list(WAYPOINTS.keys())}"
+        )
 
-            data = yaml.safe_load(f)
+    waypoints = WAYPOINTS[config_name]
 
-            if data and "wp" in data:
+    print()
+    print(
+        f"Using waypoints for {config_name}:"
+    )
 
-                for wp in data["wp"]:
+    for i, (x, y) in enumerate(waypoints):
 
-                    waypoints.append(
-                        (
-                            wp["x"],
-                            wp["y"]
-                        )
-                    )
+        print(
+            f"  WP{i + 1}: "
+            f"x = {x:.2f}, "
+            f"y = {y:.2f}"
+        )
 
     return waypoints
 
 
-waypoints = read_waypoints(
-    WAYPOINTS_FILE
-)
+# ==================================================
+# GET EXPERIMENTS
+# ==================================================
+
+def get_experiments():
+
+    experiments = []
+
+    for config_name in CONFIGURATIONS:
+
+        config_path = os.path.join(
+            BASE_PATH,
+            config_name
+        )
+
+        if not os.path.isdir(config_path):
+
+            print(
+                f"WARNING: configuration folder "
+                f"not found: {config_path}"
+            )
+
+            continue
+
+        # ------------------------------------------
+        # Equal experiments
+        # ------------------------------------------
+
+        equal_experiments = sorted(
+            glob.glob(
+                os.path.join(
+                    config_path,
+                    "exp_equal*"
+                )
+            )
+        )
+
+        # ------------------------------------------
+        # Reward experiments
+        # ------------------------------------------
+
+        reward_experiments = sorted(
+            glob.glob(
+                os.path.join(
+                    config_path,
+                    "exp_reward*"
+                )
+            )
+        )
+
+        config_experiments = (
+            equal_experiments +
+            reward_experiments
+        )
+
+        print()
+        print(
+            f"{config_name}: "
+            f"{len(equal_experiments)} equal + "
+            f"{len(reward_experiments)} reward"
+        )
+
+        for experiment in config_experiments:
+
+            if os.path.isdir(experiment):
+
+                experiments.append(
+                    (
+                        config_name,
+                        experiment
+                    )
+                )
+
+    return experiments
 
 
 # ==================================================
 # LOGGING
 # ==================================================
 
-def log_print(text):
+def log_print(
+        text,
+        log_file):
 
     line = f"{text}"
 
     print(line)
 
-    with open(LOG_FILE, "a") as f:
+    with open(
+        log_file,
+        "a"
+    ) as f:
 
         f.write(
             line + "\n"
@@ -261,7 +338,8 @@ def log_print(text):
 # MISSION TIME
 # ==================================================
 
-def get_max_mission_time(csv_folder):
+def get_max_mission_time(
+        csv_folder):
 
     mission_times = []
 
@@ -293,7 +371,9 @@ def get_max_mission_time(csv_folder):
             f"{max_time:.2f} s"
         )
 
-    return max(mission_times)
+    return max(
+        mission_times
+    )
 
 
 # ==================================================
@@ -318,11 +398,19 @@ def read_trajectory(
 
     # Remove invalid values
     df = df.dropna(
-        subset=["x", "y"]
+        subset=[
+            "x",
+            "y"
+        ]
     )
 
-    x = df["x"].to_numpy()
-    y = df["y"].to_numpy()
+    x = df[
+        "x"
+    ].to_numpy()
+
+    y = df[
+        "y"
+    ].to_numpy()
 
     return x, y
 
@@ -418,9 +506,6 @@ def compute_robot_coverage(
 
         # ------------------------------------------
         # Robot coverage
-        #
-        # The robot covers everything within
-        # robot_radius from its trajectory.
         # ------------------------------------------
 
         coverage = trajectory.buffer(
@@ -475,7 +560,9 @@ def compute_statistics(
 
         valid_area = world
 
-    total_valid_area = valid_area.area
+    total_valid_area = (
+        valid_area.area
+    )
 
     # ----------------------------------------------
     # Coverage inside valid world
@@ -522,8 +609,10 @@ def compute_statistics(
 
     if covered_area is not None:
 
-        uncovered_area = valid_area.difference(
-            covered_area
+        uncovered_area = (
+            valid_area.difference(
+                covered_area
+            )
         )
 
     else:
@@ -608,10 +697,12 @@ def plot_coverage_map(
         excluded,
         covered_area,
         uncovered_area,
-        trajectories):
+        trajectories,
+        waypoints,
+        output_dir):
 
     fig, ax = plt.subplots(
-        figsize=FIGSIZE
+        figsize=get_figsize(FIGSIZE)
     )
 
     # ----------------------------------------------
@@ -650,10 +741,14 @@ def plot_coverage_map(
     # Trajectories
     # ----------------------------------------------
 
-    for i, (x, y) in enumerate(trajectories):
+    for i, (x, y) in enumerate(
+        trajectories
+    ):
 
         color = TRAJECTORY_COLORS[
-            i % len(TRAJECTORY_COLORS)
+            i % len(
+                TRAJECTORY_COLORS
+            )
         ]
 
         ax.plot(
@@ -679,7 +774,9 @@ def plot_coverage_map(
     # Waypoints
     # ----------------------------------------------
 
-    for i, (wx, wy) in enumerate(waypoints):
+    for i, (wx, wy) in enumerate(
+        waypoints
+    ):
 
         ax.scatter(
             wx,
@@ -695,7 +792,8 @@ def plot_coverage_map(
             (wx, wy),
             xytext=(3, 3),
             textcoords="offset points",
-            fontsize=7
+            fontsize=7,
+            zorder=11
         )
 
     # ----------------------------------------------
@@ -724,8 +822,6 @@ def plot_coverage_map(
         "Y [m]"
     )
 
-    # No title for RAL paper figure
-
     # ----------------------------------------------
     # Grid
     # ----------------------------------------------
@@ -736,14 +832,19 @@ def plot_coverage_map(
         alpha=0.25
     )
 
-    ax.set_axisbelow(True)
+    ax.set_axisbelow(
+        True
+    )
 
     # ----------------------------------------------
     # Spines
     # ----------------------------------------------
 
     for spine in ax.spines.values():
-        spine.set_linewidth(0.8)
+
+        spine.set_linewidth(
+            0.8
+        )
 
     # ----------------------------------------------
     # Legend
@@ -767,7 +868,7 @@ def plot_coverage_map(
     # ----------------------------------------------
 
     output_png = os.path.join(
-        OUTPUT_DIR,
+        output_dir,
         "occupancy_map.png"
     )
 
@@ -782,7 +883,7 @@ def plot_coverage_map(
     # ----------------------------------------------
 
     output_pdf = os.path.join(
-        OUTPUT_DIR,
+        output_dir,
         "occupancy_map.pdf"
     )
 
@@ -805,25 +906,63 @@ def plot_coverage_map(
     # Show
     # ----------------------------------------------
 
-    if args.noshow:
-        plt.show()
+    # if args.noshow:
+
+    #     plt.show()
 
     plt.close(fig)
 
+
 # ==================================================
-# MAIN
+# PROCESS ONE EXPERIMENT
 # ==================================================
 
-def main():
+def process_experiment(
+        experiment_folder,
+        config_name):
 
+    print()
     print(
         "=========================================="
     )
     print(
-        " ACCURATE GEOMETRIC COVERAGE CALCULATION"
+        f"PROCESSING: {config_name}"
+    )
+    print(
+        f"EXPERIMENT: "
+        f"{os.path.basename(experiment_folder)}"
     )
     print(
         "=========================================="
+    )
+
+    csv_folder = experiment_folder
+
+    # ----------------------------------------------
+    # Output
+    # ----------------------------------------------
+
+    output_dir = os.path.join(
+        csv_folder,
+        "plots"
+    )
+
+    os.makedirs(
+        output_dir,
+        exist_ok=True
+    )
+
+    log_file = os.path.join(
+        output_dir,
+        "results.log"
+    )
+
+    # ----------------------------------------------
+    # Waypoints
+    # ----------------------------------------------
+
+    waypoints = get_waypoints(
+        config_name
     )
 
     # ----------------------------------------------
@@ -839,12 +978,13 @@ def main():
     # ----------------------------------------------
 
     max_time = get_max_mission_time(
-        CSV_FOLDER
+        csv_folder
     )
 
     log_print(
         f"MAX_TIME used: "
-        f"{max_time:.2f} s"
+        f"{max_time:.2f} s",
+        log_file
     )
 
     # ----------------------------------------------
@@ -853,7 +993,7 @@ def main():
 
     csv_files = glob.glob(
         os.path.join(
-            CSV_FOLDER,
+            csv_folder,
             "rosbot*_position.csv"
         )
     )
@@ -864,9 +1004,12 @@ def main():
 
     if len(csv_files) == 0:
 
-        raise FileNotFoundError(
-            "No CSV files found"
+        print(
+            "WARNING: No CSV files found. "
+            "Skipping experiment."
         )
+
+        return
 
     print(
         f"Found {len(csv_files)} "
@@ -915,40 +1058,59 @@ def main():
     total_world_area = world.area
 
     log_print(
-        "===== GEOMETRIC COVERAGE RESULTS ====="
+        "===== GEOMETRIC COVERAGE RESULTS =====",
+        log_file
+    )
+
+    log_print(
+        f"Configuration: {config_name}",
+        log_file
+    )
+
+    log_print(
+        f"Experiment: "
+        f"{os.path.basename(experiment_folder)}",
+        log_file
     )
 
     log_print(
         f"Total world area: "
-        f"{total_world_area:.4f} m²"
+        f"{total_world_area:.4f} m²",
+        log_file
     )
 
     log_print(
         f"Excluded area: "
-        f"{excluded_area:.4f} m²"
+        f"{excluded_area:.4f} m²",
+        log_file
     )
 
     log_print(
         f"Valid area: "
-        f"{total_valid_area:.4f} m²"
+        f"{total_valid_area:.4f} m²",
+        log_file
     )
 
     log_print(
         f"Covered area: "
-        f"{covered_area_value:.4f} m²"
+        f"{covered_area_value:.4f} m²",
+        log_file
     )
 
     log_print(
         f"Uncovered area: "
-        f"{uncovered_area_value:.4f} m²"
+        f"{uncovered_area_value:.4f} m²",
+        log_file
     )
 
     log_print(
         f"Coverage: "
-        f"{coverage_percentage:.4f}%"
+        f"{coverage_percentage:.4f}%",
+        log_file
     )
 
     print()
+
     print(
         f"Valid area      : "
         f"{total_valid_area:.4f} m²"
@@ -978,7 +1140,123 @@ def main():
         excluded,
         covered_area,
         uncovered_area,
-        trajectories
+        trajectories,
+        waypoints,
+        output_dir
+    )
+
+
+# ==================================================
+# MAIN
+# ==================================================
+
+def main():
+
+    print(
+        "=========================================="
+    )
+    print(
+        " ACCURATE GEOMETRIC COVERAGE CALCULATION"
+    )
+    print(
+        "=========================================="
+    )
+
+    print()
+    print(
+        f"Base path: {BASE_PATH}"
+    )
+
+    print(
+        f"Configurations: "
+        f"{', '.join(CONFIGURATIONS)}"
+    )
+
+    # ----------------------------------------------
+    # Find all experiments
+    # ----------------------------------------------
+
+    experiments = get_experiments()
+
+    if len(experiments) == 0:
+
+        raise RuntimeError(
+            "No experiments found."
+        )
+
+    print()
+    print(
+        f"Total experiments found: "
+        f"{len(experiments)}"
+    )
+
+    # ----------------------------------------------
+    # Process all experiments
+    # ----------------------------------------------
+
+    processed = 0
+    failed = 0
+
+    for config_name, experiment_folder in experiments:
+
+        try:
+
+            process_experiment(
+                experiment_folder,
+                config_name
+            )
+
+            processed += 1
+
+        except Exception as e:
+
+            failed += 1
+
+            print()
+            print(
+                "ERROR processing experiment:"
+            )
+
+            print(
+                f"  Configuration: "
+                f"{config_name}"
+            )
+
+            print(
+                f"  Experiment: "
+                f"{experiment_folder}"
+            )
+
+            print(
+                f"  Error: {e}"
+            )
+
+    # ----------------------------------------------
+    # Summary
+    # ----------------------------------------------
+
+    print()
+    print(
+        "=========================================="
+    )
+    print(
+        " PROCESSING COMPLETE"
+    )
+    print(
+        "=========================================="
+    )
+
+    print(
+        f"Experiments processed: {processed}"
+    )
+
+    print(
+        f"Experiments failed:    {failed}"
+    )
+
+    print(
+        f"Total experiments:     "
+        f"{len(experiments)}"
     )
 
 

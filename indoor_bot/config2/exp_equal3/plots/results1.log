@@ -1,0 +1,45 @@
+========== RESULTS ==========
+
+Robot 1
+Time near waypoint : 509.70 s
+Heading to waypoint: 32.49%
+
+Robot 2
+Time near waypoint : 353.10 s
+Heading to waypoint: 27.86%
+
+Robot 3
+Time near waypoint : 457.70 s
+Heading to waypoint: 26.28%
+
+
+========== WAYPOINT VISITS ==========
+
+Robot 1
+  WP1: 3 visits
+  WP2: 2 visits
+  WP3: 4 visits
+  WP4: 2 visits
+  WP5: 4 visits
+
+Robot 2
+  WP1: 5 visits
+  WP2: 1 visits
+  WP3: 2 visits
+  WP4: 1 visits
+  WP5: 1 visits
+
+Robot 3
+  WP1: 12 visits
+  WP2: 3 visits
+  WP3: 2 visits
+  WP4: 1 visits
+  WP5: 5 visits
+
+Total visits per waypoint:
+  WP1: 20 visits
+  WP2: 6 visits
+  WP3: 8 visits
+  WP4: 4 visits
+  WP5: 10 visits
+

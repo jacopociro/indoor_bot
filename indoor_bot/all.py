@@ -1,11 +1,23 @@
+#!/usr/bin/env python3
+
+import os
 import subprocess
 import argparse
 
+
 # ==========================================================
-# CONFIGURATION
+# ARGUMENTS
 # ==========================================================
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(
+    description="Run all analysis scripts."
+)
+
+parser.add_argument(
+    "--base-path",
+    default="/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot",
+    help="Root folder containing config1, config2 and config3"
+)
 
 parser.add_argument(
     "--ral",
@@ -13,322 +25,247 @@ parser.add_argument(
     help="Use RAL/IEEE paper plot formatting"
 )
 
+parser.add_argument(
+    "--noshow",
+    action="store_true",
+    help="Do not show figures"
+)
+
 args = parser.parse_args()
 
-COMMON_ARGS = []
-
-if args.ral:
-    COMMON_ARGS.append("--ral")
+BASE_PATH = args.base_path
 
 
 # ==========================================================
-# ESPERIMENTI
+# CONFIGURATIONS
 # ==========================================================
 
-experiments = []
-
-# exp_equal1 ... exp_equal10
-experiments += [
-    f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_equal{i}"
-    for i in range(1, 11)
-]
-
-# exp_reward1 ... exp_reward10
-experiments += [
-    f"/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_reward{i}"
-    for i in range(1, 11)
-]
-
-experiments += [
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curvreward5"
-]
-
-experiments += [
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/exp_curveequal5"
-]
-
-
-scripts = [
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/data.py",
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/plot.py",
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/occupancy.py"
+CONFIGURATIONS = [
+    "config1",
+    "config2",
+    "config3"
 ]
 
 
 # ==========================================================
-# PROCESS EXPERIMENTS
+# ARGUMENTS FOR SCRIPTS
 # ==========================================================
 
-for exp in experiments:
+def get_plot_args():
 
-    print("=" * 60)
-    print(f"Processing {exp}")
-    print("=" * 60)
+    command_args = []
 
-    for script in scripts:
+    if args.ral:
+        command_args.append("--ral")
 
-        print(f"Running {script}")
+    if args.noshow:
+        command_args.append("--noshow")
 
-        subprocess.run(
-            [
-                "python3",
-                script,
-                "--experiment",
-                exp,
-                "--noshow",
-                *COMMON_ARGS
-            ],
-            check=True
+    return command_args
+
+
+def get_aggregate_args():
+
+    command_args = [
+        "--base-path",
+        BASE_PATH
+    ]
+
+    if args.ral:
+        command_args.append("--ral")
+
+    return command_args
+
+
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+def script_path(script):
+
+    return os.path.join(
+        BASE_PATH,
+        script
+    )
+
+
+def run_script(script, script_args):
+
+    path = script_path(script)
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Script not found: {path}"
         )
 
+    print("\n" + "=" * 70)
+    print(f"Running: {script}")
+    print("=" * 70)
 
-print("\nAll experiments completed.")
-print("Starting statistics analysis...")
+    command = [
+        "python3",
+        path,
+        *script_args
+    ]
 
-
-# ==========================================================
-# STATISTICS SCRIPTS
-# ==========================================================
-
-scripts = [
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/aggregate_results.py",
-    "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/mission_time.py"
-]
-
-print(f"Running {scripts}")
-
-for script in scripts:
+    print(
+        "Command:",
+        " ".join(command)
+    )
 
     subprocess.run(
-        [
-            "python3",
-            script,
-            *COMMON_ARGS
-        ],
+        command,
         check=True
     )
-# ==========================================================
-# STATISTICA ESPERIMENTI
-# ==========================================================
-
-import os
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import re
 
 
-RESULT_DIR = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/aggregated_results"
+def check_configurations():
 
+    print("\n" + "=" * 70)
+    print("CHECKING CONFIGURATIONS")
+    print("=" * 70)
 
-def extract_occupancy(log_file):
+    found = {}
 
-    occupancy = None
+    for config in CONFIGURATIONS:
 
-    with open(log_file, "r") as f:
-        for line in f:
-
-            if "Occupancy %" in line:
-                value = line.split(":")[1]
-
-                value = value.replace("%", "").strip()
-
-                occupancy = float(value)
-
-    return occupancy
-
-
-def collect_results(exp_list):
-
-    data = []
-
-    for exp in exp_list:
-
-        name = os.path.basename(exp)
-
-        plots = os.path.join(
-            exp,
-            "plots"
+        config_path = os.path.join(
+            BASE_PATH,
+            config
         )
 
-        row = {
-            "experiment": name
-        }
+        exists = os.path.isdir(config_path)
 
+        found[config] = exists
 
-        # --------------------------
-        # waypoint + heading
-        # --------------------------
+        if exists:
+            print(f"{config}: OK")
+        else:
+            print(f"{config}: NOT FOUND")
 
-        summary_file = os.path.join(
-            plots,
-            "summary.csv"
-        )
-
-        if os.path.exists(summary_file):
-
-            df = pd.read_csv(summary_file)
-
-            row["NearWaypoint"] = (
-                df["NearWaypoint_%"].mean()
-            )
-
-            row["Heading"] = (
-                df["Heading_%"].mean()
-            )
-
-
-        # --------------------------
-        # occupancy
-        # --------------------------
-
-        log_file = os.path.join(
-            plots,
-            "results.log"
-        )
-
-        if os.path.exists(log_file):
-
-            row["Occupancy"] = (
-                extract_occupancy(log_file)
-            )
-
-
-        data.append(row)
-
-
-    return pd.DataFrame(data)
-
+    return found
 
 
 # ==========================================================
-# separazione equal / reward
+# MAIN
 # ==========================================================
 
-equal_exp = [
-    e for e in experiments
-    if "equal" in e
-]
+def main():
 
-reward_exp = [
-    e for e in experiments
-    if "reward" in e
-]
+    print("\n" + "=" * 70)
+    print("STARTING COMPLETE ANALYSIS")
+    print("=" * 70)
 
-
-equal_results = collect_results(equal_exp)
-reward_results = collect_results(reward_exp)
-
-
-
-# ==========================================================
-# funzione statistiche
-# ==========================================================
-
-def statistics(df, name):
-
-    numeric = df.select_dtypes(
-        include=np.number
+    print(
+        f"\nBase path:\n{BASE_PATH}"
     )
 
-    stats = pd.DataFrame({
-        "mean": numeric.mean(),
-        "variance": numeric.var(),
-        "std": numeric.std()
-    })
+    print("\nConfigurations:")
 
+    for config in CONFIGURATIONS:
+        print(f"  - {config}")
 
-    out = os.path.join(
-        RESULT_DIR,
-        f"{name}_statistics.csv"
+    # ------------------------------------------------------
+    # Check configuration folders
+    # ------------------------------------------------------
+
+    found = check_configurations()
+
+    missing = [
+        config
+        for config in CONFIGURATIONS
+        if not found[config]
+    ]
+
+    if missing:
+
+        raise RuntimeError(
+            "Missing configuration folders: "
+            + ", ".join(missing)
+        )
+
+    # ======================================================
+    # EXPERIMENT ANALYSIS
+    # ======================================================
+
+    print("\n" + "=" * 70)
+    print("RUNNING EXPERIMENT ANALYSIS")
+    print("=" * 70)
+
+    # ------------------------------------------------------
+    # data.py
+    # ------------------------------------------------------
+
+    run_script(
+        "data.py",
+        get_plot_args()
     )
 
-    stats.to_csv(out)
+    # ------------------------------------------------------
+    # plot.py
+    # ------------------------------------------------------
 
-    print("\n", name)
-    print(stats)
+    run_script(
+        "plot.py",
+        get_plot_args()
+    )
 
-    return stats
+    # ------------------------------------------------------
+    # occupancy.py
+    # ------------------------------------------------------
 
+    run_script(
+        "occupancy.py",
+        get_plot_args()
+    )
 
+    print("\n" + "=" * 70)
+    print("ALL EXPERIMENT ANALYSIS COMPLETED")
+    print("=" * 70)
 
-equal_stats = statistics(
-    equal_results,
-    "equal"
-)
+    # ======================================================
+    # AGGREGATION
+    # ======================================================
 
+    print("\n" + "=" * 70)
+    print("RUNNING AGGREGATION AND STATISTICS")
+    print("=" * 70)
 
-reward_stats = statistics(
-    reward_results,
-    "reward"
-)
+    # ------------------------------------------------------
+    # aggregate_results.py
+    # ------------------------------------------------------
 
+    run_script(
+        "aggregate_results.py",
+        get_aggregate_args()
+    )
+
+    # ------------------------------------------------------
+    # mission_time.py
+    # ------------------------------------------------------
+    #
+    # Per ora NON passiamo --base-path, perché non abbiamo
+    # ancora verificato gli argomenti accettati da mission_time.py.
+    #
+
+    mission_args = []
+
+    if args.ral:
+        mission_args.append("--ral")
+
+    run_script(
+        "mission_time.py",
+        mission_args
+    )
+
+    print("\n" + "=" * 70)
+    print("ALL PROCESSING COMPLETED")
+    print("=" * 70)
 
 
 # ==========================================================
-# PLOT MEDIE + VARIANZA
+# ENTRY POINT
 # ==========================================================
 
-def plot_statistics(
-        equal_stats,
-        reward_stats):
-
-
-    metrics = equal_stats.index
-
-
-    for metric in metrics:
-
-        plt.figure(figsize=(6,4))
-
-
-        means = [
-            equal_stats.loc[metric,"mean"],
-            reward_stats.loc[metric,"mean"]
-        ]
-
-        errors = [
-            equal_stats.loc[metric,"std"],
-            reward_stats.loc[metric,"std"]
-        ]
-
-
-        plt.bar(
-            [
-                "equal",
-                "reward"
-            ],
-            means,
-            yerr=errors,
-            capsize=5
-        )
-
-
-        plt.ylabel(metric)
-
-        plt.title(
-            f"{metric}: mean ± std"
-        )
-
-        plt.tight_layout()
-
-
-        plt.savefig(
-            os.path.join(
-                RESULT_DIR,
-                f"{metric}_comparison.png"
-            ),
-            dpi=300
-        )
-
-        plt.close()
-
-
-
-plot_statistics(
-    equal_stats,
-    reward_stats
-)
-
-
-print("\nStatistics completed.")
+if __name__ == "__main__":
+    main()

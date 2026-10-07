@@ -1,40 +1,90 @@
 import os
-import yaml
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
 # ============================================================
 # CONFIGURAZIONE
 # ============================================================
-import argparse
 
-parser = argparse.ArgumentParser()
-
-parser.add_argument(
-    "--experiment",
-    required=True,
-    help="Cartella dell'esperimento"
+parser = argparse.ArgumentParser(
+    description=(
+        "Genera i risultati per tutti gli esperimenti "
+        "delle configurazioni config1/config2/config3."
+    )
 )
 
 parser.add_argument(
-    "--noshow",
-    action="store_false",
-    help="Nasconde le figure"
+    "--base-path",
+    default="/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot",
+    help="Cartella che contiene config1, config2 e config3",
 )
 
 parser.add_argument(
     "--ral",
     action="store_true",
-    help="Use RAL/IEEE paper plot formatting"
+    help="Use RAL/IEEE paper plot formatting",
+)
+
+parser.add_argument(
+    "--noshow",
+    action="store_true",
+    help="Non mostrare le figure a schermo",
 )
 
 args = parser.parse_args()
 
-EXPERIMENT_FOLDER = args.experiment
+BASE_PATH = args.base_path
 
-DATA_FOLDER = f"{EXPERIMENT_FOLDER}"
-OUTPUT_FOLDER = f"{EXPERIMENT_FOLDER}/plots"
+CONFIGURATIONS = [
+    "config1",
+    "config2",
+    "config3",
+]
+
+
+# ============================================================
+# WAYPOINTS PER CONFIGURAZIONE
+# ============================================================
+
+WAYPOINTS = {
+
+    # --------------------------------------------------------
+    # CONFIG 1
+    # --------------------------------------------------------
+    "config1": np.array([
+        [-6.5, -1.0],
+        [ 3.0,  2.0],
+        [ 3.5, -3.5],
+        [-10.0, 2.0],
+        [ 4.0, -2.5],
+    ]),
+
+    # --------------------------------------------------------
+    # CONFIG 2
+    # --------------------------------------------------------
+    "config2": np.array([
+        [-3.0,  0.0],
+        [ 5.0,  2.5],
+        [ 2.5, -4.5],
+        [-10.0, 0.0],
+        [ 5.0, -1.5],
+    ]),
+
+    # --------------------------------------------------------
+    # CONFIG 3
+    # --------------------------------------------------------
+    "config3": np.array([
+        [-5.0,  2.0],
+        [ 4.0,  2.0],
+        [ 0.0, -3.0],
+        [-9.0,  3.0],
+        [-8.0, -1.0],
+    ]),
+}
+
 
 # ============================================================
 # RAL / IEEE PLOT STYLE
@@ -45,23 +95,16 @@ if args.ral:
     plt.rcParams.update({
         "font.family": "serif",
         "font.size": 8,
-
         "axes.titlesize": 9,
         "axes.labelsize": 8,
-
         "xtick.labelsize": 7,
         "ytick.labelsize": 7,
-
         "legend.fontsize": 7,
-
         "lines.linewidth": 1.2,
         "lines.markersize": 0.1,
-
         "axes.linewidth": 0.8,
-
         "xtick.major.width": 0.8,
         "ytick.major.width": 0.8,
-
         "figure.dpi": 150,
         "savefig.dpi": 300,
         "savefig.bbox": "tight",
@@ -90,49 +133,10 @@ MISSION_TIME_FILES = [
     "rosbot_3_2_mission_times.csv",
 ]
 
-WAYPOINT_FILE = (
-    "/home/gonazza/container_ws/catkin_ws/src/"
-    "indoor_bot/config/waypoints.yaml"
-)
-
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-# Salva anche in PDF
 SAVE_PDF = False
 
-
-# ============================================================
-# Calcolo automatico MAX_TIME dai file mission_times
-# ============================================================
-
-mission_times = []
-
-for file in MISSION_TIME_FILES:
-
-    path = os.path.join(DATA_FOLDER, file)
-
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"File mission time non trovato: {path}"
-        )
-
-    df_time = pd.read_csv(path)
-
-    # prende il valore massimo della colonna tempo
-    max_t = df_time["charging_completion_time"].max()
-
-    mission_times.append(max_t)
-
-
-MAX_TIME = max(mission_times)
-
-print(f"MAX_TIME utilizzato: {MAX_TIME:.2f} s")
-
-
-# Robot considerato "sul waypoint" se entro questa distanza
 WAYPOINT_RADIUS = 2.5
 
-# Heading considerato corretto se entro questa soglia
 HEADING_THRESHOLD_DEG = 45
 
 
@@ -141,509 +145,717 @@ HEADING_THRESHOLD_DEG = 45
 # ============================================================
 
 def wrap_angle(angle):
-    return (angle + np.pi) % (2 * np.pi) - np.pi
 
-
-# ============================================================
-# Caricamento waypoints
-# ============================================================
-
-with open(WAYPOINT_FILE, "r") as f:
-    wp_yaml = yaml.safe_load(f)
-
-waypoints = np.array(
-    [
-        [w["x"], w["y"]]
-        for w in wp_yaml["wp"]
-    ]
-)
-
-
-# ============================================================
-# Caricamento robot
-# ============================================================
-
-robots = []
-
-for file in POSITION_FILES:
-
-    df = pd.read_csv(
-        os.path.join(DATA_FOLDER, file)
-    )
-
-    if MAX_TIME is not None:
-        df = df[
-            df["time"] <= MAX_TIME
-        ]
-
-    robots.append(
-        df.reset_index(drop=True)
+    return (
+        (angle + np.pi) % (2 * np.pi)
+        - np.pi
     )
 
 
-# ============================================================
-# Timeline comune
-# ============================================================
+def count_waypoint_visits(
+    x,
+    y,
+    waypoints,
+    threshold,
+):
+    """
+    Conta il numero di ingressi nella regione di visita
+    di ciascun waypoint.
 
-common_time = robots[0]["time"].values
+    Una visita viene conteggiata quando il robot passa da:
 
-if MAX_TIME is not None:
-    common_time = common_time[
-        common_time <= MAX_TIME
-    ]
+        fuori dal waypoint -> dentro il waypoint
 
-interp_data = []
+    Una permanenza consecutiva nella regione viene quindi
+    conteggiata come una sola visita.
 
-for df in robots:
+    Parameters
+    ----------
+    x : array-like
+        Coordinate x del robot.
 
-    interp = {
-        "x": np.interp(
-            common_time,
-            df["time"],
-            df["x"]
-        ),
+    y : array-like
+        Coordinate y del robot.
 
-        "y": np.interp(
-            common_time,
-            df["time"],
-            df["y"]
-        ),
+    waypoints : ndarray, shape (N, 2)
+        Coordinate dei waypoint.
 
-        "yaw": np.interp(
-            common_time,
-            df["time"],
-            df["yaw"]
-        ),
-    }
+    threshold : float
+        Raggio della regione di visita [m].
 
-    interp_data.append(interp)
+    Returns
+    -------
+    visits : ndarray, shape (N,)
+        Numero di visite per ciascun waypoint.
+    """
 
-
-dt = np.mean(
-    np.diff(common_time)
-)
-
-total_time = (
-    common_time[-1]
-    - common_time[0]
-)
-
-
-# ============================================================
-# 1) Distanza dal centro dello sciame
-# ============================================================
-
-sum_distances = []
-distances = []
-
-for i in range(len(common_time)):
-
-    positions = np.array([
-        [
-            interp_data[0]["x"][i],
-            interp_data[0]["y"][i]
-        ],
-        [
-            interp_data[1]["x"][i],
-            interp_data[1]["y"][i]
-        ],
-        [
-            interp_data[2]["x"][i],
-            interp_data[2]["y"][i]
-        ]
-    ])
-
-    center = positions.mean(axis=0)
-
-    dist = np.linalg.norm(
-        positions - center,
-        axis=1
+    positions = np.column_stack(
+        (x, y)
     )
 
-    distances.append(dist)
-    sum_distances.append(
-        dist.sum()
+    visits = np.zeros(
+        len(waypoints),
+        dtype=int,
+    )
+
+    for w, waypoint in enumerate(waypoints):
+
+        distances = np.linalg.norm(
+            positions - waypoint,
+            axis=1,
+        )
+
+        inside = (
+            distances <= threshold
+        )
+
+        if len(inside) == 0:
+            continue
+
+        # Se il primo campione è già dentro
+        # il waypoint, conta una visita.
+        visits[w] = int(inside[0])
+
+        # Conta le transizioni:
+        #
+        # False -> True
+        #
+        # cioè ingresso nella regione.
+        if len(inside) > 1:
+
+            visits[w] += np.sum(
+                (~inside[:-1])
+                & inside[1:]
+            )
+
+    return visits
+
+
+def make_figure(default_size):
+
+    if args.ral:
+        return plt.figure(
+            figsize=FIGSIZE
+        )
+
+    return plt.figure(
+        figsize=default_size
     )
 
 
-# ============================================================
-# Swarm compactness
-# ============================================================
+def save_figure(
+    output_folder,
+    filename,
+):
 
-if args.ral:
-    plt.figure(figsize=FIGSIZE)
-else:
-    plt.figure(figsize=(8, 4))
+    plt.tight_layout()
 
-plt.plot(
-    common_time,
-    sum_distances
-)
-
-plt.grid(True)
-
-plt.xlabel(
-    "Time [s]"
-)
-
-plt.ylabel(
-    "Sum distance from swarm center [m]"
-)
-
-plt.title(
-    "Swarm compactness"
-)
-
-plt.tight_layout()
-
-plt.savefig(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "swarm_compactness.png"
-    ),
-    dpi=300,
-    bbox_inches="tight"
-)
-
-if SAVE_PDF:
     plt.savefig(
         os.path.join(
-            OUTPUT_FOLDER,
-            "swarm_compactness.pdf"
+            output_folder,
+            filename,
         ),
-        bbox_inches="tight"
+        dpi=300,
+        bbox_inches="tight",
     )
 
+    if SAVE_PDF:
 
-# ============================================================
-# Distanza individuale dal centro dello sciame
-# ============================================================
-
-if args.ral:
-    plt.figure(figsize=FIGSIZE)
-else:
-    plt.figure(figsize=(8, 4))
-
-distances = np.array(distances)
-
-for j in range(3):
-
-    plt.plot(
-        common_time,
-        distances[:, j],
-        label=f"UAV {j+1}"
-    )
-
-plt.grid(True)
-
-plt.xlabel(
-    "Time [s]"
-)
-
-plt.ylabel(
-    "Distance from swarm center [m]"
-)
-
-plt.title(
-    "Distance of each UAV from swarm center"
-)
-
-plt.legend()
-
-plt.tight_layout()
-
-plt.savefig(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "individual_swarm_distance.png"
-    ),
-    dpi=300,
-    bbox_inches="tight"
-)
-
-if SAVE_PDF:
-    plt.savefig(
-        os.path.join(
-            OUTPUT_FOLDER,
-            "individual_swarm_distance.pdf"
-        ),
-        bbox_inches="tight"
-    )
-
-
-# ============================================================
-# 2) Tempo entro 2.5 m da ciascun waypoint
-#    Ogni istante viene assegnato AL MASSIMO a un waypoint
-# ============================================================
-
-n_wp = len(waypoints)
-
-percent_near_wp = np.zeros(
-    (3, n_wp)
-)
-
-for r, robot in enumerate(interp_data):
-
-    x = robot["x"]
-    y = robot["y"]
-
-    # --------------------------------------------------------
-    # Calcola la distanza da tutti i waypoint per ogni istante
-    # Shape: (n_samples, n_wp)
-    # --------------------------------------------------------
-
-    positions = np.column_stack((
-        x,
-        y
-    ))
-
-    distances_wp = np.linalg.norm(
-        positions[:, None, :] - waypoints[None, :, :],
-        axis=2
-    )
-
-    # --------------------------------------------------------
-    # Per ogni istante trova il waypoint più vicino
-    # --------------------------------------------------------
-
-    nearest_wp = np.argmin(
-        distances_wp,
-        axis=1
-    )
-
-    nearest_distance = np.min(
-        distances_wp,
-        axis=1
-    )
-
-    # --------------------------------------------------------
-    # Considera valido solo se il waypoint più vicino
-    # è entro WAYPOINT_RADIUS
-    # --------------------------------------------------------
-
-    near_any_wp = (
-        nearest_distance < WAYPOINT_RADIUS
-    )
-
-    # --------------------------------------------------------
-    # Assegna ogni istante a UN SOLO waypoint
-    # --------------------------------------------------------
-
-    for w in range(n_wp):
-
-        near_this_wp = (
-            near_any_wp
-            & (nearest_wp == w)
+        pdf_name = (
+            os.path.splitext(filename)[0]
+            + ".pdf"
         )
 
-        time_near = (
-            near_this_wp.sum() * dt
+        plt.savefig(
+            os.path.join(
+                output_folder,
+                pdf_name,
+            ),
+            bbox_inches="tight",
         )
 
-        percent_near_wp[r, w] = time_near
 
 # ============================================================
-# Waypoint distance plot
+# ELABORAZIONE DI UN SINGOLO ESPERIMENTO
 # ============================================================
 
-if args.ral:
-    plt.figure(figsize=FIGSIZE)
-else:
-    plt.figure(figsize=(8, 5))
+def process_experiment(
+    experiment_folder,
+    config_name,
+):
 
-robots_name = [
-    "Robot1",
-    "Robot2",
-    "Robot3"
-]
+    data_folder = experiment_folder
 
-bottom = np.zeros(3)
-
-for w in range(n_wp):
-
-    # plt.bar(
-    #     robots_name,
-    #     percent_near_wp[:, w],
-    #     bottom=bottom,
-    #     label=f"WP {w+1}"
-    # )
-
-    bottom += percent_near_wp[:, w]
-
-
-plt.bar(
-    robots_name,
-    bottom
-)
-
-plt.ylabel(
-    "Time [s]"
-)
-
-plt.title(
-    "Tempo trascorso entro 2.5 m dai waypoint"
-)
-
-plt.tight_layout()
-
-plt.savefig(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "wpdist.png"
-    ),
-    dpi=300,
-    bbox_inches="tight"
-)
-
-if SAVE_PDF:
-    plt.savefig(
-        os.path.join(
-            OUTPUT_FOLDER,
-            "wpdist.pdf"
-        ),
-        bbox_inches="tight"
+    output_folder = os.path.join(
+        experiment_folder,
+        "plots",
     )
 
-
-# ============================================================
-# 3) Heading verso waypoint
-# ============================================================
-
-heading_percent = []
-
-threshold = np.deg2rad(
-    HEADING_THRESHOLD_DEG
-)
-
-for robot in interp_data:
-
-    x = robot["x"]
-    y = robot["y"]
-    yaw = robot["yaw"]
-
-    good_heading = np.zeros(
-        len(common_time),
-        dtype=bool
+    os.makedirs(
+        output_folder,
+        exist_ok=True,
     )
 
-    for i in range(len(common_time)):
+    print()
+    print("=" * 70)
+    print(
+        f"Configurazione: {config_name}"
+    )
+    print(
+        f"Esperimento: {experiment_folder}"
+    )
+    print("=" * 70)
 
-        pos = np.array([
-            x[i],
-            y[i]
-        ])
+    # --------------------------------------------------------
+    # Selezione waypoint della configurazione
+    # --------------------------------------------------------
 
-        d = np.linalg.norm(
-            waypoints - pos,
-            axis=1
+    if config_name not in WAYPOINTS:
+
+        raise ValueError(
+            f"Configurazione non riconosciuta: "
+            f"{config_name}"
         )
 
-        nearest = np.argmin(d)
+    waypoints = WAYPOINTS[
+        config_name
+    ].copy()
 
-        vec = (
-            waypoints[nearest]
-            - pos
+    print()
+    print("Waypoint utilizzati:")
+
+    for i, wp in enumerate(waypoints):
+
+        print(
+            f"  WP{i+1}: "
+            f"x={wp[0]:.2f}, "
+            f"y={wp[1]:.2f}"
         )
 
-        desired = np.arctan2(
-            vec[1],
-            vec[0]
+    # --------------------------------------------------------
+    # Calcolo automatico MAX_TIME dai file mission_times
+    # --------------------------------------------------------
+
+    mission_times = []
+
+    for file in MISSION_TIME_FILES:
+
+        path = os.path.join(
+            data_folder,
+            file,
         )
 
-        error = abs(
-            wrap_angle(
-                desired - yaw[i]
+        if not os.path.exists(path):
+
+            raise FileNotFoundError(
+                f"File mission time non trovato: "
+                f"{path}"
+            )
+
+        df_time = pd.read_csv(path)
+
+        max_t = (
+            df_time[
+                "charging_completion_time"
+            ].max()
+        )
+
+        mission_times.append(
+            max_t
+        )
+
+    MAX_TIME = max(
+        mission_times
+    )
+
+    print()
+    print(
+        f"MAX_TIME utilizzato: "
+        f"{MAX_TIME:.2f} s"
+    )
+
+    # --------------------------------------------------------
+    # Caricamento robot
+    # --------------------------------------------------------
+
+    robots = []
+
+    for file in POSITION_FILES:
+
+        path = os.path.join(
+            data_folder,
+            file,
+        )
+
+        if not os.path.exists(path):
+
+            raise FileNotFoundError(
+                f"File posizione non trovato: "
+                f"{path}"
+            )
+
+        df = pd.read_csv(path)
+
+        if MAX_TIME is not None:
+
+            df = df[
+                df["time"] <= MAX_TIME
+            ]
+
+        robots.append(
+            df.reset_index(
+                drop=True
             )
         )
 
-        if error < threshold:
-            good_heading[i] = True
+    # ========================================================
+    # Conteggio visite ai waypoint
+    # ========================================================
 
-    heading_percent.append(
-        100
-        * good_heading.sum()
-        * dt
-        / total_time
+    waypoint_visits = np.zeros(
+        (
+            len(robots),
+            len(waypoints),
+        ),
+        dtype=int,
     )
 
+    for r, robot in enumerate(robots):
 
-# ============================================================
-# Heading plot
-# ============================================================
+        waypoint_visits[r] = (
+            count_waypoint_visits(
+                robot["x"].values,
+                robot["y"].values,
+                waypoints,
+                WAYPOINT_RADIUS,
+            )
+        )
 
-if args.ral:
-    plt.figure(figsize=FIGSIZE)
-else:
-    plt.figure(figsize=(6, 4))
+    # Totale visite effettuate
+    # dai tre robot
+    total_waypoint_visits = (
+        waypoint_visits.sum(
+            axis=0
+        )
+    )
 
-plt.bar(
-    [
+    # ========================================================
+    # Timeline comune
+    # ========================================================
+
+    common_time = (
+        robots[0]["time"].values
+    )
+
+    if MAX_TIME is not None:
+
+        common_time = common_time[
+            common_time <= MAX_TIME
+        ]
+
+    interp_data = []
+
+    for df in robots:
+
+        interp = {
+
+            "x": np.interp(
+                common_time,
+                df["time"],
+                df["x"],
+            ),
+
+            "y": np.interp(
+                common_time,
+                df["time"],
+                df["y"],
+            ),
+
+            "yaw": np.interp(
+                common_time,
+                df["time"],
+                df["yaw"],
+            ),
+        }
+
+        interp_data.append(
+            interp
+        )
+
+    if len(common_time) < 2:
+
+        raise RuntimeError(
+            "Timeline insufficiente "
+            f"per l'esperimento "
+            f"{experiment_folder}"
+        )
+
+    dt = np.mean(
+        np.diff(common_time)
+    )
+
+    total_time = (
+        common_time[-1]
+        - common_time[0]
+    )
+
+    # ========================================================
+    # 1) Distanza dal centro dello sciame
+    # ========================================================
+
+    sum_distances = []
+
+    distances = []
+
+    for i in range(
+        len(common_time)
+    ):
+
+        positions = np.array([
+
+            [
+                interp_data[0]["x"][i],
+                interp_data[0]["y"][i],
+            ],
+
+            [
+                interp_data[1]["x"][i],
+                interp_data[1]["y"][i],
+            ],
+
+            [
+                interp_data[2]["x"][i],
+                interp_data[2]["y"][i],
+            ],
+        ])
+
+        center = (
+            positions.mean(
+                axis=0
+            )
+        )
+
+        dist = np.linalg.norm(
+            positions - center,
+            axis=1,
+        )
+
+        distances.append(
+            dist
+        )
+
+        sum_distances.append(
+            dist.sum()
+        )
+
+    # ========================================================
+    # Swarm compactness
+    # ========================================================
+
+    make_figure(
+        (8, 4)
+    )
+
+    plt.plot(
+        common_time,
+        sum_distances,
+    )
+
+    plt.grid(True)
+
+    plt.xlabel(
+        "Time [s]"
+    )
+
+    plt.ylabel(
+        "Sum distance from swarm center [m]"
+    )
+
+    plt.title(
+        "Swarm compactness"
+    )
+
+    save_figure(
+        output_folder,
+        "swarm_compactness.png",
+    )
+
+    plt.close()
+
+    # ========================================================
+    # Distanza individuale dal centro dello sciame
+    # ========================================================
+
+    make_figure(
+        (8, 4)
+    )
+
+    distances = np.array(
+        distances
+    )
+
+    for j in range(3):
+
+        plt.plot(
+            common_time,
+            distances[:, j],
+            label=f"UAV {j+1}",
+        )
+
+    plt.grid(True)
+
+    plt.xlabel(
+        "Time [s]"
+    )
+
+    plt.ylabel(
+        "Distance from swarm center [m]"
+    )
+
+    plt.title(
+        "Distance of each UAV from swarm center"
+    )
+
+    plt.legend()
+
+    save_figure(
+        output_folder,
+        "individual_swarm_distance.png",
+    )
+
+    plt.close()
+
+    # ========================================================
+    # 2) Tempo entro 2.5 m da ciascun waypoint
+    #
+    # Ogni istante viene assegnato AL MASSIMO
+    # a un waypoint, cioè al waypoint più vicino.
+    # ========================================================
+
+    n_wp = len(
+        waypoints
+    )
+
+    percent_near_wp = np.zeros(
+        (
+            3,
+            n_wp,
+        )
+    )
+
+    for r, robot in enumerate(
+        interp_data
+    ):
+
+        x = robot["x"]
+        y = robot["y"]
+
+        positions = np.column_stack(
+            (x, y)
+        )
+
+        distances_wp = np.linalg.norm(
+            positions[:, None, :]
+            - waypoints[None, :, :],
+            axis=2,
+        )
+
+        nearest_wp = np.argmin(
+            distances_wp,
+            axis=1,
+        )
+
+        nearest_distance = np.min(
+            distances_wp,
+            axis=1,
+        )
+
+        near_any_wp = (
+            nearest_distance
+            < WAYPOINT_RADIUS
+        )
+
+        for w in range(n_wp):
+
+            near_this_wp = (
+                near_any_wp
+                & (
+                    nearest_wp == w
+                )
+            )
+
+            time_near = (
+                near_this_wp.sum()
+                * dt
+            )
+
+            percent_near_wp[
+                r,
+                w,
+            ] = time_near
+
+    # ========================================================
+    # Waypoint distance plot
+    # ========================================================
+
+    make_figure(
+        (8, 5)
+    )
+
+    robots_name = [
         "Robot1",
         "Robot2",
-        "Robot3"
-    ],
-    heading_percent
-)
+        "Robot3",
+    ]
 
-plt.ylabel(
-    "% mission"
-)
+    bottom = np.zeros(3)
 
-plt.title(
-    "Heading toward nearest waypoint (<45°)"
-)
+    # Manteniamo il comportamento
+    # del file originale:
+    #
+    # il grafico mostra il tempo totale
+    # vicino ai waypoint.
 
-plt.tight_layout()
+    for w in range(n_wp):
 
-plt.savefig(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "heading.png"
-    ),
-    dpi=300,
-    bbox_inches="tight"
-)
+        bottom += (
+            percent_near_wp[:, w]
+        )
 
-if SAVE_PDF:
-    plt.savefig(
-        os.path.join(
-            OUTPUT_FOLDER,
-            "heading.pdf"
-        ),
-        bbox_inches="tight"
+    plt.bar(
+        robots_name,
+        bottom,
     )
 
-
-# ============================================================
-# Stampa risultati
-# ============================================================
-
-log_file = os.path.join(
-    OUTPUT_FOLDER,
-    "results1.log"
-)
-
-with open(log_file, "w") as f:
-
-    text = (
-        "========== RESULTS ==========\n\n"
+    plt.ylabel(
+        "Time [s]"
     )
 
-    print(
-        text,
-        end=""
+    plt.title(
+        "Tempo trascorso entro 2.5 m dai waypoint"
     )
 
-    f.write(text)
+    save_figure(
+        output_folder,
+        "wpdist.png",
+    )
 
-    for i in range(3):
+    plt.close()
+
+    # ========================================================
+    # 3) Heading verso waypoint
+    # ========================================================
+
+    heading_percent = []
+
+    threshold = np.deg2rad(
+        HEADING_THRESHOLD_DEG
+    )
+
+    for robot in interp_data:
+
+        x = robot["x"]
+        y = robot["y"]
+        yaw = robot["yaw"]
+
+        good_heading = np.zeros(
+            len(common_time),
+            dtype=bool,
+        )
+
+        for i in range(
+            len(common_time)
+        ):
+
+            pos = np.array([
+                x[i],
+                y[i],
+            ])
+
+            d = np.linalg.norm(
+                waypoints - pos,
+                axis=1,
+            )
+
+            nearest = np.argmin(
+                d
+            )
+
+            vec = (
+                waypoints[nearest]
+                - pos
+            )
+
+            desired = np.arctan2(
+                vec[1],
+                vec[0],
+            )
+
+            error = abs(
+                wrap_angle(
+                    desired - yaw[i]
+                )
+            )
+
+            if error < threshold:
+
+                good_heading[i] = True
+
+        heading_percent.append(
+            100
+            * good_heading.sum()
+            * dt
+            / total_time
+        )
+
+    # ========================================================
+    # Heading plot
+    # ========================================================
+
+    make_figure(
+        (6, 4)
+    )
+
+    plt.bar(
+        [
+            "Robot1",
+            "Robot2",
+            "Robot3",
+        ],
+        heading_percent,
+    )
+
+    plt.ylabel(
+        "% mission"
+    )
+
+    plt.title(
+        "Heading toward nearest waypoint (<45°)"
+    )
+
+    save_figure(
+        output_folder,
+        "heading.png",
+    )
+
+    plt.close()
+
+    # ========================================================
+    # Stampa risultati
+    # ========================================================
+
+    log_file = os.path.join(
+        output_folder,
+        "results1.log",
+    )
+
+    with open(
+        log_file,
+        "w",
+    ) as f:
 
         text = (
-            f"Robot {i+1}\n"
-            f"Time near waypoint : "
-            f"{percent_near_wp[i].sum():.2f}%\n"
-            f"Heading to waypoint: "
-            f"{heading_percent[i]:.2f}%\n\n"
+            "========== RESULTS ==========\n\n"
         )
 
         print(
@@ -651,66 +863,403 @@ with open(log_file, "w") as f:
             end=""
         )
 
-        f.write(text)
+        f.write(
+            text
+        )
 
+        for i in range(3):
 
-# ============================================================
-# Summary
-# ============================================================
+            text = (
 
-summary = pd.DataFrame({
-    "Robot": [
-        "Robot1",
-        "Robot2",
-        "Robot3"
-    ],
+                f"Robot {i+1}\n"
 
-    "NearWaypoint_%":
-        percent_near_wp.sum(axis=1),
+                f"Time near waypoint : "
+                f"{percent_near_wp[i].sum():.2f} s\n"
 
-    "Heading_%":
-        heading_percent
-})
+                f"Heading to waypoint: "
+                f"{heading_percent[i]:.2f}%\n\n"
+            )
 
-summary.to_csv(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "summary.csv"
-    ),
-    index=False
-)
+            print(
+                text,
+                end=""
+            )
 
+            f.write(
+                text
+            )
 
-# ============================================================
-# Dettaglio waypoint
-# ============================================================
+        # ----------------------------------------------------
+        # Waypoint visits
+        # ----------------------------------------------------
 
-columns = [
-    f"WP{i+1}"
-    for i in range(len(waypoints))
-]
+        text = (
+            "\n"
+            "========== WAYPOINT VISITS ==========\n\n"
+        )
 
-detail = pd.DataFrame(
-    percent_near_wp,
-    columns=columns,
-    index=[
-        "Robot1",
-        "Robot2",
-        "Robot3"
-    ]
-)
+        print(
+            text,
+            end=""
+        )
 
-detail.to_csv(
-    os.path.join(
-        OUTPUT_FOLDER,
-        "waypoint_statistics.csv"
+        f.write(
+            text
+        )
+
+        for i in range(3):
+
+            text = (
+                f"Robot {i+1}\n"
+            )
+
+            for w in range(
+                len(waypoints)
+            ):
+
+                text += (
+
+                    f"  WP{w+1}: "
+                    f"{waypoint_visits[i, w]} "
+                    f"visits\n"
+                )
+
+            text += "\n"
+
+            print(
+                text,
+                end=""
+            )
+
+            f.write(
+                text
+            )
+
+        text = (
+            "Total visits per waypoint:\n"
+        )
+
+        for w in range(
+            len(waypoints)
+        ):
+
+            text += (
+
+                f"  WP{w+1}: "
+                f"{total_waypoint_visits[w]} "
+                f"visits\n"
+            )
+
+        text += "\n"
+
+        print(
+            text,
+            end=""
+        )
+
+        f.write(
+            text
+        )
+
+    # ========================================================
+    # Summary
+    # ========================================================
+
+    summary = pd.DataFrame({
+
+        "Robot": [
+            "Robot1",
+            "Robot2",
+            "Robot3",
+        ],
+
+        "NearWaypoint_%":
+            percent_near_wp.sum(
+                axis=1
+            ),
+
+        "Heading_%":
+            heading_percent,
+    })
+
+    summary.to_csv(
+        os.path.join(
+            output_folder,
+            "summary.csv",
+        ),
+        index=False,
     )
+
+    # ========================================================
+    # Dettaglio waypoint
+    # ========================================================
+
+    columns = [
+        f"WP{i+1}"
+        for i in range(
+            len(waypoints)
+        )
+    ]
+
+    detail = pd.DataFrame(
+        percent_near_wp,
+        columns=columns,
+        index=[
+            "Robot1",
+            "Robot2",
+            "Robot3",
+        ],
+    )
+
+    detail.to_csv(
+        os.path.join(
+            output_folder,
+            "waypoint_statistics.csv",
+        )
+    )
+
+    # ========================================================
+    # Conteggio visite ai waypoint
+    # ========================================================
+
+    visit_columns = [
+        f"WP{i+1}"
+        for i in range(
+            len(waypoints)
+        )
+    ]
+
+    visit_detail = pd.DataFrame(
+        waypoint_visits,
+        columns=visit_columns,
+        index=[
+            "Robot1",
+            "Robot2",
+            "Robot3",
+        ],
+    )
+
+    # Aggiunge il totale dei tre robot
+    visit_detail.loc["Total"] = (
+        visit_detail.sum(
+            axis=0
+        )
+    )
+
+    visit_detail.to_csv(
+        os.path.join(
+            output_folder,
+            "waypoint_visit_counts.csv",
+        )
+    )
+
+    print(
+        f"Output salvati in: "
+        f"{output_folder}"
+    )
+
+
+# ============================================================
+# SCOPERTA AUTOMATICA DEGLI ESPERIMENTI
+# ============================================================
+
+def find_experiments(
+    config_folder
+):
+
+    experiments = []
+
+    if not os.path.isdir(
+        config_folder
+    ):
+
+        return experiments
+
+    # Cerca sia exp_equal*
+    # sia exp_reward*
+
+    for name in sorted(
+        os.listdir(
+            config_folder
+        )
+    ):
+
+        path = os.path.join(
+            config_folder,
+            name,
+        )
+
+        if not os.path.isdir(
+            path
+        ):
+
+            continue
+
+        if (
+            name.startswith(
+                "exp_equal"
+            )
+            or
+            name.startswith(
+                "exp_reward"
+            )
+        ):
+
+            experiments.append(
+                path
+            )
+
+    return experiments
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+all_experiments = []
+
+for config_name in CONFIGURATIONS:
+
+    config_folder = os.path.join(
+        BASE_PATH,
+        config_name,
+    )
+
+    experiments = find_experiments(
+        config_folder
+    )
+
+    if not experiments:
+
+        print(
+            f"[WARNING] Nessun esperimento "
+            f"trovato in {config_folder}"
+        )
+
+        continue
+
+    print()
+    print(
+        "#" * 70
+    )
+
+    print(
+        f"{config_name}: "
+        f"trovati {len(experiments)} esperimenti"
+    )
+
+    print(
+        "#" * 70
+    )
+
+    for experiment_folder in experiments:
+
+        all_experiments.append(
+            (
+                config_name,
+                experiment_folder,
+            )
+        )
+
+
+# ============================================================
+# ESECUZIONE DI TUTTE LE CONFIGURAZIONI
+# ============================================================
+
+failed = []
+
+for (
+    config_name,
+    experiment_folder,
+) in all_experiments:
+
+    try:
+
+        process_experiment(
+            experiment_folder,
+            config_name,
+        )
+
+    except Exception as e:
+
+        print()
+
+        print(
+            f"[ERROR] "
+            f"{config_name} / "
+            f"{os.path.basename(experiment_folder)}: "
+            f"{e}"
+        )
+
+        failed.append(
+            (
+                config_name,
+                experiment_folder,
+                str(e),
+            )
+        )
+
+
+# ============================================================
+# RISULTATI FINALI
+# ============================================================
+
+print()
+print(
+    "=" * 70
 )
+
+print(
+    "ELABORAZIONE COMPLETATA"
+)
+
+print(
+    "=" * 70
+)
+
+for config_name in CONFIGURATIONS:
+
+    count = sum(
+        1
+        for cfg, _ in all_experiments
+        if cfg == config_name
+    )
+
+    print(
+        f"{config_name}: "
+        f"{count} esperimenti trovati"
+    )
+
+
+# ============================================================
+# ESPERIMENTI CON ERRORI
+# ============================================================
+
+if failed:
+
+    print()
+    print(
+        "Esperimenti con errore:"
+    )
+
+    for (
+        config_name,
+        experiment_folder,
+        error,
+    ) in failed:
+
+        print(
+            f"  - "
+            f"{config_name}/"
+            f"{os.path.basename(experiment_folder)}: "
+            f"{error}"
+        )
 
 
 # ============================================================
 # SHOW
 # ============================================================
 
-if args.noshow:
+if not args.noshow:
+
     plt.show()

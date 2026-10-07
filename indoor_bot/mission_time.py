@@ -10,18 +10,11 @@ import matplotlib.pyplot as plt
 
 BASE_PATH = "/home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot"
 
-EQUAL_EXPERIMENTS = [
-    os.path.join(BASE_PATH, f"exp_equal{i}")
-    for i in range(1, 11)
+CONFIGURATIONS = [
+    "config1",
+    "config2",
+    "config3"
 ]
-
-REWARD_EXPERIMENTS = [
-    os.path.join(BASE_PATH, f"exp_reward{i}")
-    for i in range(1, 11)
-]
-
-OUTPUT_DIR = os.path.join(BASE_PATH, "aggregated_results")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 ROBOT_FILES = [
     "rosbot_1_0_mission_times.csv",
@@ -123,14 +116,19 @@ def get_swarm_mission_time(exp_path):
         completed["time"].iloc[0]
     )
 
+    # Stampa il tempo swarm per gli esperimenti reward
     for i in range(1, 11):
 
-        if exp_path == (
-            f"/home/gonazza/container_ws/catkin_ws/"
-            f"src/indoor_bot/indoor_bot/exp_reward{i}"
+        if os.path.normpath(exp_path) == os.path.normpath(
+            os.path.join(
+                BASE_PATH,
+                os.path.basename(os.path.dirname(exp_path)),
+                f"exp_reward{i}"
+            )
         ):
 
             print(
+                f"{os.path.basename(os.path.dirname(exp_path))} "
                 f"exp_reward{i} - "
                 f"t_end: {t_end - t0:.2f} s"
             )
@@ -265,147 +263,274 @@ def analyze_group(experiments, name):
 
 
 # ==================================================
+# PROCESS ONE CONFIGURATION
+# ==================================================
+
+def process_configuration(config_name):
+
+    print()
+    print("=" * 60)
+    print(f"PROCESSING {config_name}")
+    print("=" * 60)
+
+    config_path = os.path.join(
+        BASE_PATH,
+        config_name
+    )
+
+    if not os.path.isdir(config_path):
+
+        print(
+            f"[WARNING] Configuration not found: "
+            f"{config_path}"
+        )
+
+        return
+
+    # --------------------------------------------------
+    # Experiments
+    # --------------------------------------------------
+
+    equal_experiments = [
+        os.path.join(
+            config_path,
+            f"exp_equal{i}"
+        )
+        for i in range(1, 11)
+    ]
+
+    reward_experiments = [
+        os.path.join(
+            config_path,
+            f"exp_reward{i}"
+        )
+        for i in range(1, 11)
+    ]
+
+    # Considera solo gli esperimenti realmente presenti
+    equal_experiments = [
+        exp
+        for exp in equal_experiments
+        if os.path.isdir(exp)
+    ]
+
+    reward_experiments = [
+        exp
+        for exp in reward_experiments
+        if os.path.isdir(exp)
+    ]
+
+    print(
+        f"Equal experiments: {len(equal_experiments)}"
+    )
+
+    print(
+        f"Reward experiments: {len(reward_experiments)}"
+    )
+
+    # --------------------------------------------------
+    # Output
+    # --------------------------------------------------
+
+    output_dir = os.path.join(
+        config_path,
+        "aggregated_results"
+    )
+
+    os.makedirs(
+        output_dir,
+        exist_ok=True
+    )
+
+    # ==================================================
+    # ANALYZE EQUAL
+    # ==================================================
+
+    equal_results = analyze_group(
+        equal_experiments,
+        "equal"
+    )
+
+    # ==================================================
+    # ANALYZE REWARD
+    # ==================================================
+
+    reward_results = analyze_group(
+        reward_experiments,
+        "reward"
+    )
+
+    # ==================================================
+    # ALL RESULTS
+    # ==================================================
+
+    all_results = pd.concat(
+        [
+            equal_results,
+            reward_results
+        ],
+        ignore_index=True
+    )
+
+    print(
+        "\n=============================="
+    )
+
+    print(
+        f"{config_name}"
+    )
+
+    print(
+        all_results
+    )
+
+    print(
+        "=============================="
+    )
+
+    # ==================================================
+    # SAVE AGGREGATED RESULTS
+    # ==================================================
+
+    for group_name, group_results in [
+        ("equal", equal_results),
+        ("reward", reward_results)
+    ]:
+
+        aggregated = group_results[
+            [
+                "Agent",
+                "Mean [s]"
+            ]
+        ].copy()
+
+        aggregated.columns = [
+            "Agent",
+            "Mission time [s]"
+        ]
+
+        aggregated.to_csv(
+            os.path.join(
+                output_dir,
+                f"{group_name}_mission_time.csv"
+            ),
+            index=False
+        )
+
+    # ==================================================
+    # PLOT
+    # ==================================================
+
+    for group in [
+        "equal",
+        "reward"
+    ]:
+
+        df = all_results[
+            all_results["Group"] == group
+        ]
+
+        if df.empty:
+            continue
+
+        fig, ax = plt.subplots(
+            figsize=FIGSIZE
+        )
+
+        x = np.arange(
+            len(df)
+        )
+
+        ax.bar(
+            x,
+            df["Mean [s]"],
+            yerr=df["Std [s]"],
+            capsize=3,
+            linewidth=0.8
+        )
+
+        # ----------------------------------------------
+        # AXIS
+        # ----------------------------------------------
+
+        ax.set_xticks(x)
+
+        ax.set_xticklabels(
+            df["Agent"]
+        )
+
+        ax.set_ylabel(
+            "Mission time [s]"
+        )
+
+        # ----------------------------------------------
+        # GRID
+        # ----------------------------------------------
+
+        ax.grid(
+            axis="y",
+            linewidth=0.6,
+            alpha=0.4
+        )
+
+        ax.set_axisbelow(True)
+
+        # ----------------------------------------------
+        # SPINES
+        # ----------------------------------------------
+
+        for spine in ax.spines.values():
+            spine.set_linewidth(0.8)
+
+        # ----------------------------------------------
+        # LAYOUT
+        # ----------------------------------------------
+
+        fig.tight_layout()
+
+        # ----------------------------------------------
+        # SAVE PNG
+        # ----------------------------------------------
+
+        fig.savefig(
+            os.path.join(
+                output_dir,
+                f"{group}_mission_time.png"
+            ),
+            dpi=300,
+            bbox_inches="tight"
+        )
+
+        # ----------------------------------------------
+        # SAVE PDF
+        # ----------------------------------------------
+
+        fig.savefig(
+            os.path.join(
+                output_dir,
+                f"{group}_mission_time.pdf"
+            ),
+            bbox_inches="tight"
+        )
+
+        plt.close(fig)
+
+    print(
+        f"\nResults saved in: {output_dir}"
+    )
+
+
+# ==================================================
 # MAIN
 # ==================================================
 
-equal_results = analyze_group(
-    EQUAL_EXPERIMENTS,
-    "equal"
+for config_name in CONFIGURATIONS:
+
+    process_configuration(
+        config_name
+    )
+
+
+print(
+    "\nAggregation complete for all configurations."
 )
-
-reward_results = analyze_group(
-    REWARD_EXPERIMENTS,
-    "reward"
-)
-
-all_results = pd.concat(
-    [
-        equal_results,
-        reward_results
-    ],
-    ignore_index=True
-)
-
-print("\n==============================")
-print(all_results)
-print("==============================")
-
-
-# ==================================================
-# SAVE AGGREGATED RESULTS
-# ==================================================
-
-for group_name, group_results in [
-    ("equal", equal_results),
-    ("reward", reward_results)
-]:
-
-    aggregated = group_results[
-        [
-            "Agent",
-            "Mean [s]"
-        ]
-    ].copy()
-
-    aggregated.columns = [
-        "Agent",
-        "Mission time [s]"
-    ]
-
-    aggregated.to_csv(
-        os.path.join(
-            OUTPUT_DIR,
-            f"{group_name}_mission_time.csv"
-        ),
-        index=False
-    )
-
-
-# ==================================================
-# PLOT
-# ==================================================
-
-for group in ["equal", "reward"]:
-
-    df = all_results[
-        all_results["Group"] == group
-    ]
-
-    fig, ax = plt.subplots(
-        figsize=FIGSIZE
-    )
-
-    x = np.arange(len(df))
-
-    ax.bar(
-        x,
-        df["Mean [s]"],
-        yerr=df["Std [s]"],
-        capsize=3,
-        linewidth=0.8
-    )
-
-    # ----------------------------------------------
-    # AXIS
-    # ----------------------------------------------
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(
-        df["Agent"]
-    )
-
-    ax.set_ylabel(
-        "Mission time [s]"
-    )
-
-    # ----------------------------------------------
-    # GRID
-    # ----------------------------------------------
-
-    ax.grid(
-        axis="y",
-        linewidth=0.6,
-        alpha=0.4
-    )
-
-    ax.set_axisbelow(True)
-
-    # ----------------------------------------------
-    # SPINES
-    # ----------------------------------------------
-
-    for spine in ax.spines.values():
-        spine.set_linewidth(0.8)
-
-    # ----------------------------------------------
-    # LAYOUT
-    # ----------------------------------------------
-
-    fig.tight_layout()
-
-    # ----------------------------------------------
-    # SAVE
-    # ----------------------------------------------
-
-    fig.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            f"{group}_mission_time.png"
-        ),
-        dpi=300,
-        bbox_inches="tight"
-    )
-
-    # Optional vector version for the paper
-    fig.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            f"{group}_mission_time.pdf"
-        ),
-        bbox_inches="tight"
-    )
-
-    plt.close(fig)
-
-
-print("\nAggregation complete.")
