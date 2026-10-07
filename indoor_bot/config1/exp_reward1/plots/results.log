@@ -1,27 +1,3 @@
-==========================================
- ACCURATE GEOMETRIC COVERAGE CALCULATION
-==========================================
-Experiment: /home/gonazza/container_ws/catkin_ws/src/indoor_bot/indoor_bot/config1/exp_reward1
-Robot radius: 2.50 m
-
-MAX_TIME used: 1048.00 s
-===== GEOMETRIC COVERAGE RESULTS =====
-Total world area: 210.0000 m²
-Excluded area: 23.3000 m²
-Valid area: 186.7000 m²
-Covered area: 165.4761 m²
-Uncovered area: 21.2239 m²
-Coverage: 88.6321%
-MAX_TIME used: 1048.00 s
-===== GEOMETRIC COVERAGE RESULTS =====
-Configuration: config1
-Experiment: exp_reward1
-Total world area: 210.0000 m²
-Excluded area: 23.3000 m²
-Valid area: 186.7000 m²
-Covered area: 165.4761 m²
-Uncovered area: 21.2239 m²
-Coverage: 88.6321%
 MAX_TIME used: 1048.00 s
 ===== GEOMETRIC COVERAGE RESULTS =====
 Configuration: config1
