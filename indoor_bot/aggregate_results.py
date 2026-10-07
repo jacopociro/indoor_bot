@@ -4012,6 +4012,92 @@ def compare_equal_reward_all_configurations_photosynthesis_scalar(
 # GLOBAL MISSION TIME
 # ============================================================
 
+
+def get_swarm_mission_time(experiment_path):
+    """
+    Return the swarm mission completion time defined as the
+    first instant at which the photosynthesis log has ph != 0.
+
+    The returned value is relative to the first valid time t0,
+    following the same definition used in the standalone
+    photosynthesis-based mission-time analysis.
+    """
+
+    file_path = os.path.join(
+        experiment_path,
+        "photosynthesis_log.csv"
+    )
+
+    if not os.path.exists(file_path):
+        return None
+
+    try:
+        df = pd.read_csv(file_path)
+    except Exception as exc:
+        print(
+            f"Warning reading {file_path}: {exc}"
+        )
+        return None
+
+    if len(df) == 0:
+        return None
+
+    if "time" not in df.columns or "ph" not in df.columns:
+        return None
+
+    time = pd.to_numeric(
+        df["time"],
+        errors="coerce"
+    )
+
+    ph = pd.to_numeric(
+        df["ph"],
+        errors="coerce"
+    )
+
+    valid = time.notna() & ph.notna()
+    df_valid = df.loc[valid].copy()
+
+    if len(df_valid) == 0:
+        return None
+
+    df_valid["time"] = pd.to_numeric(
+        df_valid["time"],
+        errors="coerce"
+    )
+
+    df_valid["ph"] = pd.to_numeric(
+        df_valid["ph"],
+        errors="coerce"
+    )
+
+    t0 = float(
+        df_valid["time"].iloc[0]
+    )
+
+    # Preserve the definition used in the reference analysis:
+    # if the first timestamp is zero, use the following sample
+    # as t0.
+    if t0 == 0.0 and len(df_valid) > 1:
+        t0 = float(
+            df_valid["time"].iloc[1]
+        )
+
+    # First value of ph different from zero.
+    completed = df_valid[
+        df_valid["ph"] != 0
+    ]
+
+    if completed.empty:
+        return None
+
+    t_end = float(
+        completed["time"].iloc[0]
+    )
+
+    return t_end - t0
+
+
 def get_configuration_mission_means(
     configuration_results,
     config_name,
@@ -4239,16 +4325,20 @@ def compare_equal_reward_all_configurations_mission_time(
     configuration_results,
     output_folder
 ):
+    """
+    Compare robot and swarm mission completion times averaged
+    across config1/config2/config3.
 
-    fig, ax = plt.subplots(
-        figsize=get_figsize()
-    )
+    Robot mission time:
+        last charging_completion_time in *_mission_times.csv.
 
-    width = 0.35
+    Swarm mission time:
+        first time at which ph != 0 in photosynthesis_log.csv,
+        relative to t0.
 
-    # ============================================================
-    # Robot + Swarm
-    # ============================================================
+    The swarm time is therefore NOT the sum or the maximum of
+    the three robot mission times.
+    """
 
     labels = [
         "Robot 1",
@@ -4259,13 +4349,12 @@ def compare_equal_reward_all_configurations_mission_time(
 
     equal_means = []
     equal_stds = []
-
     reward_means = []
     reward_stds = []
 
-    # ============================================================
-    # Robot 1, Robot 2, Robot 3
-    # ============================================================
+    # ========================================================
+    # ROBOT 1 / ROBOT 2 / ROBOT 3
+    # ========================================================
 
     for robot in ROBOTS:
 
@@ -4274,204 +4363,178 @@ def compare_equal_reward_all_configurations_mission_time(
 
         for config_name in CONFIG_NAMES:
 
-            equal_result = (
-                get_configuration_mission_means(
-                    configuration_results,
-                    config_name,
-                    "equal"
-                )
-            )
-
-            reward_result = (
-                get_configuration_mission_means(
-                    configuration_results,
-                    config_name,
-                    "reward"
-                )
-            )
-
-            if robot in equal_result:
-                equal_values.append(
-                    equal_result[robot]
-                )
-
-            if robot in reward_result:
-                reward_values.append(
-                    reward_result[robot]
-                )
-
-        # Equal
-        if len(equal_values) > 0:
-
-            equal_means.append(
-                np.mean(equal_values)
-            )
-
-            equal_stds.append(
-                np.std(equal_values)
-            )
-
-        else:
-
-            equal_means.append(
-                np.nan
-            )
-
-            equal_stds.append(
-                0
-            )
-
-        # Reward
-        if len(reward_values) > 0:
-
-            reward_means.append(
-                np.mean(reward_values)
-            )
-
-            reward_stds.append(
-                np.std(reward_values)
-            )
-
-        else:
-
-            reward_means.append(
-                np.nan
-            )
-
-            reward_stds.append(
-                0
-            )
-
-    # ============================================================
-    # SWARM
-    # ============================================================
-    #
-    # Per ogni configurazione:
-    #
-    #     swarm_time =
-    #         max(Robot 1, Robot 2, Robot 3)
-    #
-    # Poi viene fatta la media tra config1/config2/config3.
-    #
-    # ============================================================
-
-    equal_swarm_values = []
-    reward_swarm_values = []
-
-    for config_name in CONFIG_NAMES:
-
-        equal_result = (
-            get_configuration_mission_means(
+            equal_result = get_configuration_mission_means(
                 configuration_results,
                 config_name,
                 "equal"
             )
-        )
 
-        reward_result = (
-            get_configuration_mission_means(
+            reward_result = get_configuration_mission_means(
                 configuration_results,
                 config_name,
                 "reward"
             )
-        )
-
-        # --------------------------------------------------------
-        # Equal swarm
-        # --------------------------------------------------------
-
-        equal_robot_values = []
-
-        for robot in ROBOTS:
 
             if robot in equal_result:
-
                 value = equal_result[robot]
-
                 if np.isfinite(value):
-                    equal_robot_values.append(
-                        value
-                    )
-
-        if len(equal_robot_values) == len(ROBOTS):
-
-            equal_swarm_values.append(
-                max(equal_robot_values)
-            )
-
-        # --------------------------------------------------------
-        # Reward swarm
-        # --------------------------------------------------------
-
-        reward_robot_values = []
-
-        for robot in ROBOTS:
+                    equal_values.append(value)
 
             if robot in reward_result:
-
                 value = reward_result[robot]
-
                 if np.isfinite(value):
-                    reward_robot_values.append(
-                        value
+                    reward_values.append(value)
+
+        if len(equal_values) > 0:
+            equal_means.append(np.mean(equal_values))
+            equal_stds.append(np.std(equal_values))
+        else:
+            equal_means.append(np.nan)
+            equal_stds.append(0)
+
+        if len(reward_values) > 0:
+            reward_means.append(np.mean(reward_values))
+            reward_stds.append(np.std(reward_values))
+        else:
+            reward_means.append(np.nan)
+            reward_stds.append(0)
+
+    # ========================================================
+    # SWARM
+    # ========================================================
+    #
+    # For EACH experiment:
+    #
+    #     swarm_time = first(ph != 0) - t0
+    #
+    # Then:
+    #
+    #     experiment swarm times
+    #             -> mean per configuration
+    #             -> mean across config1/config2/config3
+    #
+    # This gives equal weight to the three configurations and
+    # never combines the three robot completion times.
+    # ========================================================
+
+    equal_configuration_means = []
+    reward_configuration_means = []
+
+    for config_name in CONFIG_NAMES:
+
+        if config_name not in configuration_results:
+            continue
+
+        for group, destination in [
+            ("equal", equal_configuration_means),
+            ("reward", reward_configuration_means)
+        ]:
+
+            if group not in configuration_results[config_name]:
+                continue
+
+            experiments = configuration_results[
+                config_name
+            ][group]["experiments"]
+
+            experiment_swarm_times = []
+
+            for experiment_path in experiments:
+
+                swarm_time = get_swarm_mission_time(
+                    experiment_path
+                )
+
+                if (
+                    swarm_time is not None
+                    and np.isfinite(swarm_time)
+                ):
+                    experiment_swarm_times.append(
+                        swarm_time
                     )
 
-        if len(reward_robot_values) == len(ROBOTS):
+            if len(experiment_swarm_times) > 0:
+                configuration_mean = np.mean(
+                    experiment_swarm_times
+                )
 
-            reward_swarm_values.append(
-                max(reward_robot_values)
-            )
+                destination.append(
+                    configuration_mean
+                )
 
-    # ------------------------------------------------------------
-    # Append swarm statistics
-    # ------------------------------------------------------------
+    # Mean across configurations.
+    equal_swarm_values = [
+        value
+        for value in equal_configuration_means
+        if np.isfinite(value)
+    ]
+
+    reward_swarm_values = [
+        value
+        for value in reward_configuration_means
+        if np.isfinite(value)
+    ]
 
     if len(equal_swarm_values) > 0:
-
         equal_means.append(
             np.mean(equal_swarm_values)
         )
-
         equal_stds.append(
             np.std(equal_swarm_values)
         )
-
     else:
-
-        equal_means.append(
-            np.nan
-        )
-
-        equal_stds.append(
-            0
-        )
+        equal_means.append(np.nan)
+        equal_stds.append(0)
 
     if len(reward_swarm_values) > 0:
-
         reward_means.append(
             np.mean(reward_swarm_values)
         )
-
         reward_stds.append(
             np.std(reward_swarm_values)
         )
-
     else:
+        reward_means.append(np.nan)
+        reward_stds.append(0)
 
-        reward_means.append(
-            np.nan
-        )
+    # ========================================================
+    # CSV
+    # ========================================================
 
-        reward_stds.append(
-            0
-        )
+    rows = []
 
-    # ============================================================
-    # Plot
-    # ============================================================
+    for i, label in enumerate(labels):
+        rows.append({
+            "Metric": label,
+            "Equal_mean": equal_means[i],
+            "Equal_std": equal_stds[i],
+            "Reward_mean": reward_means[i],
+            "Reward_std": reward_stds[i]
+        })
 
-    x = np.arange(
-        len(labels)
+    csv_path = os.path.join(
+        output_folder,
+        "mission_time_equal_reward_all_configurations.csv"
+    )
+
+    pd.DataFrame(rows).to_csv(
+        csv_path,
+        index=False
+    )
+
+    print(
+        f"Saved: {csv_path}"
+    )
+
+    # ========================================================
+    # PLOT
+    # ========================================================
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(
+        figsize=get_figsize()
     )
 
     ax.bar(
@@ -4492,25 +4555,19 @@ def compare_equal_reward_all_configurations_mission_time(
         label="Reward"
     )
 
-    ax.set_xticks(
-        x
-    )
-
-    ax.set_xticklabels(
-        labels
-    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
 
     ax.set_ylabel(
-        "Mission time [s]"
+        "Mission completion time [s]"
     )
 
     ax.set_title(
-        "Mission time - Equal vs Reward\n"
+        "Mission completion time - Equal vs Reward\n"
         "Mean across configurations"
     )
 
     ax.legend()
-
     ax.grid(
         axis="y",
         alpha=0.25
@@ -4521,6 +4578,28 @@ def compare_equal_reward_all_configurations_mission_time(
         output_folder,
         "mission_time_equal_reward_all_configurations.png"
     )
+
+    # ========================================================
+    # PRINT
+    # ========================================================
+
+    print()
+    print("=" * 75)
+    print("GLOBAL MISSION COMPLETION TIME - EQUAL VS REWARD")
+    print("Average across config1, config2 and config3")
+    print("Swarm = first ph != 0 in photosynthesis_log.csv")
+    print("=" * 75)
+
+    for i, label in enumerate(labels):
+        print(
+            f"{label:8s} | "
+            f"Equal: {equal_means[i]:.3f} ± "
+            f"{equal_stds[i]:.3f} s | "
+            f"Reward: {reward_means[i]:.3f} ± "
+            f"{reward_stds[i]:.3f} s"
+        )
+
+    print("=" * 75)
 
 # ============================================================
 # GLOBAL WAYPOINT PERCENTAGE
@@ -5579,11 +5658,6 @@ def main():
         ALL_CONFIG_EQUAL_REWARD_DIR
     )
 
-    compare_equal_reward_mission_time_all_configurations(
-        configuration_results,
-        ALL_CONFIG_EQUAL_REWARD_DIR
-        
-    )
 
 
 if __name__ == "__main__":

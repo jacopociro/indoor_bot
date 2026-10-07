@@ -8,3 +8,13 @@ Valid area: 186.7000 m²
 Covered area: 159.0020 m²
 Uncovered area: 27.6980 m²
 Coverage: 85.1644%
+MAX_TIME used: 586.30 s
+===== GEOMETRIC COVERAGE RESULTS =====
+Configuration: config3
+Experiment: exp_reward9
+Total world area: 210.0000 m²
+Excluded area: 23.3000 m²
+Valid area: 186.7000 m²
+Covered area: 159.0020 m²
+Uncovered area: 27.6980 m²
+Coverage: 85.1644%
