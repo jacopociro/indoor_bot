@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Aggregate and compare Equal vs Reward across config1/config2/config3.
-
+a
 For every experiment, computes:
 - area covered / occupancy [%]
 - time near WP1..WP5 and total waypoint time [s]
@@ -53,6 +53,7 @@ WAYPOINTS = {
     ],
 }
 WAYPOINT_RADIUS = 2.5
+WAYPOINT_REENTRY_DELAY_S = 15.0
 HEADING_THRESHOLD_DEG = 45.0
 ROBOT_RADIUS = 2.5
 XMIN, XMAX, YMIN, YMAX = -14.0, 7.0, -6.0, 4.0
@@ -197,6 +198,65 @@ def waypoint_time(pos, waypoints):
     return result
 
 
+
+def waypoint_visits(pos, waypoints):
+    """
+    Count entries into each waypoint zone independently.
+
+    A visit starts when the robot enters the radius (distance <= WAYPOINT_RADIUS).
+    If the first valid sample is already inside, it counts as the initial visit.
+    After leaving a zone, the robot must remain continuously outside it for at
+    least WAYPOINT_REENTRY_DELAY_S before a subsequent entry can count as a new
+    visit. Brief exits shorter than this delay remain part of the same visit.
+    """
+    if pos is None or pos.empty:
+        return np.full(len(waypoints), np.nan)
+
+    points = pos[["x", "y"]].to_numpy(dtype=float)
+    times = pos["time"].to_numpy(dtype=float)
+    distances = np.linalg.norm(
+        points[:, None, :] - waypoints[None, :, :], axis=2
+    )
+    inside = distances <= WAYPOINT_RADIUS
+    visits = np.zeros(len(waypoints), dtype=float)
+
+    for wp_idx in range(len(waypoints)):
+        in_zone = inside[:, wp_idx]
+        if len(in_zone) == 0:
+            continue
+
+        # The first sample inside is counted as an initial visit.
+        active_visit = bool(in_zone[0])
+        if active_visit:
+            visits[wp_idx] = 1.0
+
+        outside_since = None
+        for sample_idx in range(1, len(in_zone)):
+            t = times[sample_idx]
+
+            if in_zone[sample_idx]:
+                if not active_visit:
+                    # The first entry always starts the initial visit. Later
+                    # entries count only after the required outside delay.
+                    if visits[wp_idx] == 0.0:
+                        visits[wp_idx] = 1.0
+                    elif outside_since is not None and t - outside_since >= WAYPOINT_REENTRY_DELAY_S:
+                        visits[wp_idx] += 1.0
+                    active_visit = True
+                # If the robot returned before the delay elapsed, it is still
+                # considered the same visit.
+                outside_since = None
+
+            else:
+                if active_visit:
+                    active_visit = False
+                    outside_since = t
+                elif outside_since is None:
+                    outside_since = t
+
+    return visits
+
+
 def heading_percent(pos, yaw, waypoints, mission_time_value):
     if yaw is None or not np.isfinite(mission_time_value) or mission_time_value <= 0:
         return np.full(len(waypoints), np.nan), np.nan
@@ -290,42 +350,6 @@ def photosynthesis(path):
     return float(values.iloc[-1]) if len(values) else np.nan
 
 
-def swarm_completion_time(path):
-    """Return elapsed time until the first non-zero swarm photosynthesis value."""
-    df = read_csv(os.path.join(path, "photosynthesis_log.csv"))
-    if df is None or "time" not in df.columns:
-        return np.nan
-
-    column = next(
-        (c for c in ["photosynthesis", "photosynthesis_produced", "ph", "PH"] if c in df.columns),
-        None,
-    )
-    if column is None:
-        column = next(
-            (c for c in df.columns if c.lower() != "time"
-             and pd.to_numeric(df[c], errors="coerce").notna().any()),
-            None,
-        )
-    if column is None:
-        return np.nan
-
-    data = df[["time", column]].copy()
-    data["time"] = pd.to_numeric(data["time"], errors="coerce")
-    data[column] = pd.to_numeric(data[column], errors="coerce")
-    data = data.dropna(subset=["time", column]).sort_values("time")
-    if data.empty:
-        return np.nan
-
-    # Convert the logged timestamp to elapsed mission time by subtracting
-    # the first timestamp in the log from the completion timestamp.
-    first_time = float(data["time"].iloc[0])
-    completed = data[data[column] > 0]
-    return (
-        float(completed["time"].iloc[0]) - first_time
-        if not completed.empty else np.nan
-    )
-
-
 def process(info):
     config = info["configuration"]
     path = info["path"]
@@ -348,28 +372,21 @@ def process(info):
         mt = mission_times[robot]
         pos = position(path, robot, mt)
         waypoint_times = np.full(5, np.nan)
+        waypoint_visit_counts = np.full(5, np.nan)
         heading_values = np.full(5, np.nan)
         heading_total = np.nan
 
         if pos is not None:
             waypoint_times = waypoint_time(pos, waypoints)
+            waypoint_visit_counts = waypoint_visits(pos, waypoints)
             heading_values, heading_total = heading_percent(
                 pos, yaw_data(path, robot, pos), waypoints, mt
             )
 
         for i in range(5):
             row[f"{robot}_WP{i + 1}_time_s"] = waypoint_times[i]
+            row[f"{robot}_WP{i + 1}_visits"] = waypoint_visit_counts[i]
             row[f"{robot}_WP{i + 1}_heading_percent"] = heading_values[i]
-            # Fraction of the robot's total mission spent near this waypoint.
-            # Compute it per experiment before aggregation, rather than dividing
-            # aggregated mean waypoint time by aggregated mean mission time.
-            row[f"{robot}_WP{i + 1}_mission_percent"] = (
-                100.0 * waypoint_times[i] / mt
-                if np.isfinite(waypoint_times[i])
-                and np.isfinite(mt)
-                and mt > 0
-                else np.nan
-            )
 
         total_waypoint_time = (
             np.nan if np.all(np.isnan(waypoint_times)) else np.nansum(waypoint_times)
@@ -382,9 +399,34 @@ def process(info):
         )
         row[f"{robot}_heading_waypoint_total_percent"] = heading_total
 
+    # Swarm-level metrics: combine the three robots within each experiment.
+    # Time is robot-time (the sum of time spent by all robots near a WP).
+    for i in range(1, 6):
+        visit_values = [
+            row.get(f"{robot}_WP{i}_visits", np.nan) for robot in ROBOTS
+        ]
+        time_values = [
+            row.get(f"{robot}_WP{i}_time_s", np.nan) for robot in ROBOTS
+        ]
+        row[f"swarm_WP{i}_visits"] = (
+            float(np.nansum(visit_values))
+            if np.isfinite(np.asarray(visit_values, dtype=float)).any()
+            else np.nan
+        )
+        row[f"swarm_WP{i}_time_s"] = (
+            float(np.nansum(time_values))
+            if np.isfinite(np.asarray(time_values, dtype=float)).any()
+            else np.nan
+        )
+
+    swarm_time_values = [row[f"swarm_WP{i}_time_s"] for i in range(1, 6)]
+    row["swarm_waypoint_time_total_s"] = (
+        float(np.nansum(swarm_time_values))
+        if np.isfinite(np.asarray(swarm_time_values, dtype=float)).any()
+        else np.nan
+    )
+
     row["photosynthesis_produced"] = photosynthesis(path)
-    # Swarm completion time: first timestamp at which photosynthesis is non-zero.
-    row["swarm_completion_time_s"] = swarm_completion_time(path)
     return row
 
 
@@ -525,53 +567,6 @@ def plot_waypoint_times(aggregated, robot):
         savefig(fig,f"{robot}_time_near_waypoints_{scope}_equal_reward")
 
 
-def plot_waypoint_mission_percent(aggregated, robot):
-    """Plot each waypoint's time as a percentage of total mission time.
-
-    Generates one image per configuration and one overall image, comparing
-    Equal and Reward. The percentages are computed for each experiment in
-    process(), then averaged here with the other metrics.
-    """
-    scopes = ["config1", "config2", "config3", "all_configurations"]
-    labels = ["Config 1", "Config 2", "Config 3", "All"]
-    metrics = [f"{robot}_WP{i}_mission_percent" for i in range(1, 6)]
-    metric_labels = ["WP1", "WP2", "WP3", "WP4", "WP5"]
-
-    for scope, scope_label in zip(scopes, labels):
-        x = np.arange(5)
-        width = 0.32
-        equal_means, equal_stds = [], []
-        reward_means, reward_stds = [], []
-
-        for metric in metrics:
-            values = get_metric_values(aggregated, metric, scope)
-            equal_means.append(values["equal"][0])
-            equal_stds.append(values["equal"][1])
-            reward_means.append(values["reward"][0])
-            reward_stds.append(values["reward"][1])
-
-        fig, ax = plt.subplots(figsize=(4.0, 3.0))
-        ax.bar(
-            x - width / 2, equal_means, width,
-            yerr=equal_stds, capsize=2.5, label="Equal"
-        )
-        ax.bar(
-            x + width / 2, reward_means, width,
-            yerr=reward_stds, capsize=2.5, label="Reward", hatch="//"
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(metric_labels)
-        ax.set_ylabel("Mission time spent near waypoint [%]")
-        ax.set_ylim(bottom=0)
-        ax.set_title(f"{ROBOT_LABELS[robot]} — {scope_label}")
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(ncol=2)
-        savefig(
-            fig,
-            f"{robot}_time_near_waypoint_mission_percent_{scope}_equal_reward"
-        )
-
-
 def plot_waypoint_time_sum(aggregated, robot):
     """Compare the sum of WP1..WP5 time across the three configurations and All."""
     scopes=["config1","config2","config3","all_configurations"]; labels=["Config 1","Config 2","Config 3","All"]
@@ -585,6 +580,97 @@ def plot_waypoint_time_sum(aggregated, robot):
     ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("Total time near WPs [s]")
     ax.set_title(ROBOT_LABELS[robot]); ax.grid(axis="y",alpha=0.25); ax.legend(ncol=2)
     savefig(fig,f"{robot}_waypoint_time_sum_equal_reward")
+
+def plot_waypoint_visits(aggregated, robot):
+    """Plot mean number of visits to WP1..WP5 for each configuration and All."""
+    scopes = ["config1", "config2", "config3", "all_configurations"]
+    labels = ["Config 1", "Config 2", "Config 3", "All"]
+    metrics = [f"{robot}_WP{i}_visits" for i in range(1, 6)]
+    metric_labels = ["WP1", "WP2", "WP3", "WP4", "WP5"]
+
+    for scope, scope_label in zip(scopes, labels):
+        x = np.arange(5)
+        width = 0.32
+        equal_means, equal_stds, reward_means, reward_stds = [], [], [], []
+        for metric in metrics:
+            values = get_metric_values(aggregated, metric, scope)
+            equal_means.append(values["equal"][0])
+            equal_stds.append(values["equal"][1])
+            reward_means.append(values["reward"][0])
+            reward_stds.append(values["reward"][1])
+
+        fig, ax = plt.subplots(figsize=(4.0, 3.0))
+        ax.bar(x - width / 2, equal_means, width, yerr=equal_stds,
+               capsize=2.5, label="Equal")
+        ax.bar(x + width / 2, reward_means, width, yerr=reward_stds,
+               capsize=2.5, label="Reward", hatch="//")
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_labels)
+        ax.set_ylabel("Mean number of visits")
+        ax.set_title(f"{ROBOT_LABELS[robot]} — {scope_label}")
+        ax.grid(axis="y", alpha=0.25)
+        ax.legend(ncol=2)
+        savefig(fig, f"{robot}_mean_number_of_visits_{scope}_equal_reward")
+
+
+def plot_swarm_waypoint_metric(aggregated, metric_template, ylabel, filename_prefix):
+    """Compare waypoint metrics aggregated across all three robots."""
+    scopes = ["config1", "config2", "config3", "all_configurations"]
+    labels = ["Config 1", "Config 2", "Config 3", "All"]
+    metric_labels = ["WP1", "WP2", "WP3", "WP4", "WP5"]
+
+    for scope, scope_label in zip(scopes, labels):
+        x = np.arange(5)
+        width = 0.32
+        equal_means, equal_stds, reward_means, reward_stds = [], [], [], []
+        for i in range(1, 6):
+            values = get_metric_values(aggregated, metric_template.format(i), scope)
+            equal_means.append(values["equal"][0])
+            equal_stds.append(values["equal"][1])
+            reward_means.append(values["reward"][0])
+            reward_stds.append(values["reward"][1])
+
+        fig, ax = plt.subplots(figsize=(4.0, 3.0))
+        ax.bar(x - width / 2, equal_means, width, yerr=equal_stds,
+               capsize=2.5, label="Equal")
+        ax.bar(x + width / 2, reward_means, width, yerr=reward_stds,
+               capsize=2.5, label="Reward", hatch="//")
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_labels)
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"All three robots — {scope_label}")
+        ax.grid(axis="y", alpha=0.25)
+        ax.legend(ncol=2)
+        savefig(fig, f"{filename_prefix}_{scope}_equal_reward")
+
+
+def plot_swarm_waypoint_time_sum(aggregated):
+    """Compare total time spent near all waypoints, summed over the three robots."""
+    scopes = ["config1", "config2", "config3", "all_configurations"]
+    labels = ["Config 1", "Config 2", "Config 3", "All"]
+    x = np.arange(len(scopes))
+    width = 0.34
+    equal_means, equal_stds, reward_means, reward_stds = [], [], [], []
+    for scope in scopes:
+        values = get_metric_values(aggregated, "swarm_waypoint_time_total_s", scope)
+        equal_means.append(values["equal"][0])
+        equal_stds.append(values["equal"][1])
+        reward_means.append(values["reward"][0])
+        reward_stds.append(values["reward"][1])
+
+    fig, ax = plt.subplots(figsize=(4.0, 3.0))
+    ax.bar(x - width / 2, equal_means, width, yerr=equal_stds,
+           capsize=2.5, label="Equal")
+    ax.bar(x + width / 2, reward_means, width, yerr=reward_stds,
+           capsize=2.5, label="Reward", hatch="//")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Total robot-time near WPs [s]")
+    ax.set_title("All three robots")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(ncol=2)
+    savefig(fig, "swarm_waypoint_time_sum_equal_reward")
+
 
 def plot_heading(aggregated, robot):
     """Create one figure for each configuration (plus All) showing WP1..WP5 heading %."""
@@ -601,50 +687,7 @@ def plot_heading(aggregated, robot):
         ax.set_title(f"{ROBOT_LABELS[robot]} — {scope_label}"); ax.grid(axis="y",alpha=0.25); ax.legend(ncol=2)
         savefig(fig,f"{robot}_heading_towards_waypoints_{scope}_equal_reward")
 
-def plot_robot_and_swarm_completion_times(aggregated):
-    """Save one Equal-vs-Reward mission-time comparison plot per configuration.
-
-    Each plot compares the three individual robot mission times with the swarm
-    completion time (first non-zero photosynthesis timestamp).
-    """
-    categories = [ROBOT_LABELS[r] for r in ROBOTS] + ["Swarm completion"]
-    metrics = [f"{robot}_mission_time_s" for robot in ROBOTS] + ["swarm_completion_time_s"]
-    x = np.arange(len(categories))
-    width = 0.34
-
-    for config in CONFIGURATIONS:
-        equal_means, equal_stds = [], []
-        reward_means, reward_stds = [], []
-        for metric in metrics:
-            values = get_metric_values(aggregated, metric, config)
-            equal_means.append(values["equal"][0])
-            equal_stds.append(values["equal"][1])
-            reward_means.append(values["reward"][0])
-            reward_stds.append(values["reward"][1])
-
-        fig, ax = plt.subplots(figsize=(4.6, 3.0))
-        ax.bar(
-            x - width / 2, equal_means, width,
-            yerr=equal_stds, capsize=2.5, label="Equal"
-        )
-        ax.bar(
-            x + width / 2, reward_means, width,
-            yerr=reward_stds, capsize=2.5, label="Reward", hatch="//"
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(categories, rotation=15, ha="right")
-        ax.set_ylabel("Time [s]")
-        ax.set_title(f"Robot and swarm completion time — {config.replace('config', 'Config ')}")
-        ax.set_ylim(bottom=0)
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(ncol=2)
-        savefig(fig, f"robot_and_swarm_completion_time_{config}_equal_reward")
-
-
 def plots(aggregated):
-    # Compare individual robot mission times with swarm completion time.
-    plot_robot_and_swarm_completion_times(aggregated)
-
     # 1. Occupancy / area covered.
     grouped_equal_reward_plot(
         aggregated,
@@ -668,13 +711,29 @@ def plots(aggregated):
     for robot in ROBOTS:
         plot_waypoint_times(aggregated, robot)
         plot_waypoint_time_sum(aggregated, robot)
-        plot_waypoint_mission_percent(aggregated, robot)
+        plot_waypoint_visits(aggregated, robot)
 
-    # 4. Heading towards each waypoint, separately for each configuration and All.
+    # 4. Swarm-level waypoint metrics: combine all three robots per experiment.
+    # Visit counts are summed across robots; time is summed in robot-seconds.
+    plot_swarm_waypoint_metric(
+        aggregated,
+        "swarm_WP{}_visits",
+        "Mean number of visits (3 robots)",
+        "swarm_mean_number_of_visits",
+    )
+    plot_swarm_waypoint_metric(
+        aggregated,
+        "swarm_WP{}_time_s",
+        "Time near waypoint [robot-s]",
+        "swarm_time_near_waypoints",
+    )
+    plot_swarm_waypoint_time_sum(aggregated)
+
+    # 5. Heading towards each waypoint, separately for each configuration and All.
     for robot in ROBOTS:
         plot_heading(aggregated, robot)
 
-    # 5. Total waypoint time / mission time, separately for all robots.
+    # 6. Total waypoint time / mission time, separately for all robots.
     scopes = ["config1", "config2", "config3", "all_configurations"]
     labels = ["Config 1", "Config 2", "Config 3", "All"]
     x = np.arange(len(scopes))
@@ -719,7 +778,7 @@ def plots(aggregated):
     ax.legend(ncol=2)
     savefig(fig, "waypoint_time_over_mission_time_equal_reward")
 
-    # 6. Photosynthesis produced.
+    # 7. Photosynthesis produced.
     grouped_equal_reward_plot(
         aggregated,
         "photosynthesis_produced",
