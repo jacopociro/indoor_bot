@@ -350,6 +350,243 @@ def photosynthesis(path):
     return float(values.iloc[-1]) if len(values) else np.nan
 
 
+def photosynthesis_timeseries(path):
+    """Read cumulative photosynthesis production as a function of elapsed time."""
+    df = read_csv(os.path.join(path, "photosynthesis_log.csv"))
+    if df is None or df.empty or "time" not in df.columns:
+        return None
+
+    column = next(
+        (c for c in ["photosynthesis", "photosynthesis_produced", "ph", "PH"]
+         if c in df.columns),
+        None,
+    )
+    if column is None:
+        for c in df.columns:
+            if c.lower() != "time" and pd.to_numeric(df[c], errors="coerce").notna().any():
+                column = c
+                break
+    if column is None:
+        return None
+
+    data = pd.DataFrame({
+        "time": pd.to_numeric(df["time"], errors="coerce"),
+        "production": pd.to_numeric(df[column], errors="coerce"),
+    }).dropna()
+    data = data.sort_values("time")
+    if data.empty:
+        return None
+
+    # Combine duplicate timestamps and express time relative to the first sample.
+    data = data.groupby("time", as_index=False)["production"].mean()
+    data["time"] -= data["time"].iloc[0]
+    if len(data) < 2 or data["time"].max() <= 0:
+        return None
+
+    return data[["time", "production"]].reset_index(drop=True)
+
+
+def plot_photosynthesis_over_time(experiments):
+    """
+    Plot mean cumulative photosynthesis over elapsed mission time for Equal and
+    Reward, separately for each configuration. Curves use a shared time horizon
+    within each configuration so that the two approaches are compared fairly.
+    """
+    for config in CONFIGURATIONS:
+        series_by_group = {"equal": [], "reward": []}
+        for info in experiments:
+            if info["configuration"] != config:
+                continue
+            series = photosynthesis_timeseries(info["path"])
+            if series is not None:
+                series_by_group[info["group"]].append(series)
+
+        available = series_by_group["equal"] + series_by_group["reward"]
+        if not available or not series_by_group["equal"] or not series_by_group["reward"]:
+            print(
+                f"WARNING: cannot plot photosynthesis time series for {config}: "
+                "missing valid Equal or Reward logs."
+            )
+            continue
+
+        # Use the shortest experiment duration in this configuration to avoid
+        # extrapolating either approach beyond observed data.
+        common_duration = min(float(ts["time"].max()) for ts in available)
+        if common_duration <= 0:
+            continue
+        time_grid = np.linspace(0.0, common_duration, 250)
+
+        fig, ax = plt.subplots(figsize=(4.0, 3.0))
+        csv_rows = []
+        for group, label in [("equal", "Equal"), ("reward", "Reward")]:
+            interpolated = []
+            for ts in series_by_group[group]:
+                t = ts["time"].to_numpy(dtype=float)
+                y = ts["production"].to_numpy(dtype=float)
+                valid = (t >= 0.0) & (t <= common_duration)
+                if valid.sum() < 2:
+                    continue
+                interpolated.append(np.interp(time_grid, t[valid], y[valid]))
+
+            if not interpolated:
+                continue
+
+            values = np.vstack(interpolated)
+            mean_values = np.nanmean(values, axis=0)
+            std_values = (
+                np.nanstd(values, axis=0, ddof=1)
+                if values.shape[0] > 1
+                else np.zeros(values.shape[1])
+            )
+            ax.plot(time_grid, mean_values, label=f"{label} (n={values.shape[0]})")
+            if values.shape[0] > 1:
+                ax.fill_between(
+                    time_grid,
+                    np.maximum(mean_values - std_values, 0.0),
+                    mean_values + std_values,
+                    alpha=0.18,
+                )
+
+            for t, mean, std in zip(time_grid, mean_values, std_values):
+                csv_rows.append({
+                    "configuration": config,
+                    "group": group,
+                    "time_s": t,
+                    "photosynthesis_mean": mean,
+                    "photosynthesis_std": std,
+                    "n_experiments": values.shape[0],
+                })
+
+        ax.set_xlabel("Elapsed time [s]")
+        ax.set_ylabel("Mean photosynthesis produced")
+        ax.set_title(f"Photosynthesis production over time — {config.replace('config', 'Config ')}")
+        ax.grid(alpha=0.25)
+        ax.legend()
+        savefig(fig, f"photosynthesis_over_time_{config}_equal_reward")
+
+        if csv_rows:
+            csv_path = os.path.join(
+                OUTPUT_DIR, f"photosynthesis_over_time_{config}_mean_std.csv"
+            )
+            pd.DataFrame(csv_rows).to_csv(csv_path, index=False)
+
+
+
+def plot_photosynthesis_over_time_all_configurations(experiments):
+    """Plot all six mean time-series: Equal and Reward for each configuration."""
+    styles = {
+        ("config1", "equal"): ("tab:blue", "-"),
+        ("config1", "reward"): ("tab:blue", "--"),
+        ("config2", "equal"): ("tab:orange", "-"),
+        ("config2", "reward"): ("tab:orange", "--"),
+        ("config3", "equal"): ("tab:green", "-"),
+        ("config3", "reward"): ("tab:green", "--"),
+    }
+    series_by_pair = {(config, group): [] for config in CONFIGURATIONS for group in GROUPS}
+    for info in experiments:
+        series = photosynthesis_timeseries(info["path"])
+        if series is not None:
+            series_by_pair[(info["configuration"], info["group"])].append(series)
+
+    valid_series = [ts for items in series_by_pair.values() for ts in items]
+    if not valid_series:
+        print("WARNING: cannot plot combined photosynthesis time series: no valid logs.")
+        return
+
+    # One shared horizon ensures the six curves are compared over the same time interval.
+    common_duration = min(float(ts["time"].max()) for ts in valid_series)
+    if common_duration <= 0:
+        print("WARNING: cannot plot combined photosynthesis time series: invalid duration.")
+        return
+    time_grid = np.linspace(0.0, common_duration, 250)
+    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+    csv_rows = []
+
+    for config in CONFIGURATIONS:
+        for group in GROUPS:
+            series_list = series_by_pair[(config, group)]
+            if not series_list:
+                print(f"WARNING: no valid photosynthesis logs for {config}/{group}.")
+                continue
+            interpolated = []
+            for ts in series_list:
+                t = ts["time"].to_numpy(dtype=float)
+                y = ts["production"].to_numpy(dtype=float)
+                valid = (t >= 0.0) & (t <= common_duration)
+                if valid.sum() >= 2:
+                    interpolated.append(np.interp(time_grid, t[valid], y[valid]))
+            if not interpolated:
+                continue
+
+            values = np.vstack(interpolated)
+            mean_values = np.nanmean(values, axis=0)
+            std_values = (np.nanstd(values, axis=0, ddof=1)
+                          if values.shape[0] > 1 else np.zeros(values.shape[1]))
+            color, linestyle = styles[(config, group)]
+            label = f"{config.replace('config', 'Config ')} — {group.capitalize()} (n={values.shape[0]})"
+            ax.plot(time_grid, mean_values, color=color, linestyle=linestyle, label=label)
+            if values.shape[0] > 1:
+                ax.fill_between(time_grid,
+                                np.maximum(mean_values - std_values, 0.0),
+                                mean_values + std_values,
+                                color=color, alpha=0.08)
+            for t, mean, std in zip(time_grid, mean_values, std_values):
+                csv_rows.append({
+                    "configuration": config, "group": group, "time_s": t,
+                    "photosynthesis_mean": mean, "photosynthesis_std": std,
+                    "n_experiments": values.shape[0],
+                })
+
+    ax.set_xlabel("Elapsed time [s]")
+    ax.set_ylabel("Mean photosynthesis produced")
+    ax.set_title("Mean photosynthesis production over time")
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=6, ncol=2)
+    savefig(fig, "photosynthesis_over_time_all_configurations_equal_reward")
+    if csv_rows:
+        pd.DataFrame(csv_rows).to_csv(
+            os.path.join(OUTPUT_DIR, "photosynthesis_over_time_all_configurations_mean_std.csv"),
+            index=False,
+        )
+
+
+def plot_waypoint_configurations_map():
+    """Plot all waypoint layouts on the same environment map, colored by configuration."""
+    colors = {"config1": "tab:blue", "config2": "tab:orange", "config3": "tab:green"}
+    labels = {"config1": "Config 1", "config2": "Config 2", "config3": "Config 3"}
+    fig, ax = plt.subplots(figsize=(5.0, 3.5))
+
+    # Environment bounds and excluded/empty regions used by the coverage metric.
+    ax.add_patch(plt.Rectangle((XMIN, YMIN), XMAX - XMIN, YMAX - YMIN,
+                               fill=False, edgecolor="black", linewidth=1.0,
+                               label="Environment bounds"))
+    for i, (x0, x1, y0, y1) in enumerate(EMPTY_AREAS):
+        ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0,
+                                   facecolor="silver", edgecolor="grey",
+                                   alpha=0.35, linewidth=0.5,
+                                   label="Excluded area" if i == 0 else None))
+
+    for config in CONFIGURATIONS:
+        points = np.asarray(WAYPOINTS[config], dtype=float)
+        ax.scatter(points[:, 0], points[:, 1], s=48, marker="o",
+                   color=colors[config], edgecolors="black", linewidths=0.5,
+                   label=labels[config], zorder=3)
+        for wp_idx, (x, y) in enumerate(points, start=1):
+            ax.annotate(f"WP{wp_idx}", (x, y), xytext=(4, 4),
+                        textcoords="offset points", fontsize=6,
+                        color=colors[config])
+
+    ax.set_xlim(XMIN - 0.3, XMAX + 0.3)
+    ax.set_ylim(YMIN - 0.3, YMAX + 0.3)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.set_title("Waypoint layouts for the three configurations")
+    ax.grid(alpha=0.2)
+    ax.legend(fontsize=7, ncol=2, loc="best")
+    savefig(fig, "waypoint_map_all_configurations")
+
+
 def process(info):
     config = info["configuration"]
     path = info["path"]
@@ -785,6 +1022,14 @@ def plots(aggregated):
         "Photosynthesis produced",
         "photosynthesis_produced_equal_reward",
     )
+
+    # 8. Mean cumulative photosynthesis production over time, separately and combined.
+    experiments = find_experiments()
+    plot_photosynthesis_over_time(experiments)
+    plot_photosynthesis_over_time_all_configurations(experiments)
+
+    # 9. Single map showing waypoint locations for all three configurations.
+    plot_waypoint_configurations_map()
 
 
 def main():
