@@ -808,13 +808,13 @@ def plot_coverage_map(
     # Legend
     # ----------------------------------------------
 
-    ax.legend(
-        loc="best",
-        frameon=True,
-        framealpha=0.9,
-        edgecolor="black",
-        fontsize=7
-    )
+    # ax.legend(
+    #     loc="best",
+    #     frameon=True,
+    #     framealpha=0.9,
+    #     edgecolor="black",
+    #     fontsize=7
+    # )
 
     # ----------------------------------------------
     # Layout
